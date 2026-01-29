@@ -1,0 +1,91 @@
+# ============================================================
+# Universal Modbus Decoder - Configuration
+# ============================================================
+# Copy this file to config.yaml and adjust values as needed.
+# ============================================================
+
+# ------------------------------------------------------------
+# MQTT Broker Settings
+# ------------------------------------------------------------
+mqtt:
+  # Broker hostname or IP address
+  host: "localhost"
+  
+  # Broker port (typically 1883 for TCP, 8883 for TLS)
+  port: 1883
+  
+  # Client ID (must be unique per connection)
+  client_id: "modbus-decoder-001"
+  
+  # Authentication (leave empty if not required)
+  username: ""
+  password: ""
+  
+  # Reconnect settings
+  reconnect_delay_sec: 5
+  
+  # Topic patterns
+  # RAW telemetry subscription (+ is wildcard for router SN)
+  raw_topic_pattern: "cg/v1/telemetry/SN/+"
+  
+  # Decoded data publication base
+  decoded_topic_base: "cg/v1/decoded/SN"
+
+# ------------------------------------------------------------
+# Web UI Settings
+# ------------------------------------------------------------
+web:
+  # Host to bind (0.0.0.0 for all interfaces)
+  host: "0.0.0.0"
+  
+  # Port for web interface
+  port: 8080
+  
+  # Enable debug mode (auto-reload, verbose errors)
+  debug: false
+
+# ------------------------------------------------------------
+# Health Monitor Settings
+# ------------------------------------------------------------
+health:
+  # Seconds without message before panel is marked "stale"
+  stale_threshold_sec: 10
+  
+  # Seconds without message before panel is marked "offline"
+  offline_threshold_sec: 60
+  
+  # Health check interval
+  check_interval_sec: 5
+
+# ------------------------------------------------------------
+# Register Maps
+# ------------------------------------------------------------
+maps:
+  # Path to register map file (JSONL format)
+  register_map: "maps/register_map.jsonl"
+  
+  # Path to enum definitions (JSON format)
+  enum_map: "maps/enum_map.json"
+  
+  # Path to fault bitmap definitions (JSONL format)
+  fault_bitmap_map: "maps/fault_bitmap_map.jsonl"
+
+# ------------------------------------------------------------
+# Logging Settings
+# ------------------------------------------------------------
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # Log to file (empty = console only)
+  file: ""
+  
+  # Log format
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+# ------------------------------------------------------------
+# Runtime Mode
+# ------------------------------------------------------------
+# debug: verbose logging, raw input/output, decode failure reasons
+# production: minimal logging
+mode: "production"

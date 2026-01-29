@@ -1,0 +1,14 @@
+# Universal Modbus Decoder & Web UI
+# Python dependencies
+
+# MQTT client
+paho-mqtt>=2.0.0
+
+# Web framework
+flask>=3.0.0
+
+# Configuration
+pyyaml>=6.0
+
+# Async support (for health monitor)
+apscheduler>=3.10.0
