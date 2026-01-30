@@ -288,6 +288,8 @@ PANEL_TEMPLATE = '''
                         {% endif %}
                     {% elif reg.unit == 'bitfield' %}
                         {{ reg.value.hex }} (bits: {{ reg.value.active_bits|join(', ') or 'none' }})
+                    {% elif reg.text %}
+                        {{ reg.value }} <span class="raw-value">({{ reg.text }})</span>
                     {% elif reg.value is mapping %}
                         {{ reg.value }}
                     {% else %}

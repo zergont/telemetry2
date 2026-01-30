@@ -210,6 +210,7 @@ class ModbusDecoder:
             'addr': addr,
             'name': None,
             'value': None,
+            'text': None,
             'unit': None,
             'raw': None,
             'reason': None
@@ -255,14 +256,14 @@ class ModbusDecoder:
         data_type = reg_def.get('data_type', 'u16')
         
         if unit == 'enum':
-            # Try enum lookup
+            # For enum: value is numeric, text is label
+            result['value'] = int(raw)
+            result['unit'] = None  # enum has no unit
             enum_label = self.decode_enum(reg_type, addr, int(raw))
             if enum_label:
-                result['value'] = enum_label
-            else:
-                result['value'] = decoded
-                if self.debug_mode:
-                    logger.debug(f"No enum definition for {addr}={raw}")
+                result['text'] = enum_label
+            elif self.debug_mode:
+                logger.debug(f"No enum definition for {addr}={raw}")
                     
         elif data_type == 'bitfield':
             # Check if this is a fault bitmap

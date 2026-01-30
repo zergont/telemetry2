@@ -28,8 +28,8 @@ Designed for Cummins PCC but architecture is universal.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-repo/modbus-decoder.git
-cd modbus-decoder
+git clone https://github.com/zergont/telemetry2.git
+cd telemetry2
 ```
 
 ### 2. Create virtual environment
@@ -74,19 +74,19 @@ python app.py --config /path/to/config.yaml
 
 ## Running as a Service (systemd)
 
-Create `/etc/systemd/system/modbus-decoder.service`:
+Create `/etc/systemd/system/telemetry2.service`:
 
 ```ini
 [Unit]
-Description=Universal Modbus Decoder
+Description=Universal Modbus Decoder (telemetry2)
 After=network.target
 
 [Service]
 Type=simple
 User=youruser
-WorkingDirectory=/path/to/modbus-decoder
-Environment="PATH=/path/to/modbus-decoder/venv/bin"
-ExecStart=/path/to/modbus-decoder/venv/bin/python app.py
+WorkingDirectory=/opt/telemetry2
+Environment="PATH=/opt/telemetry2/venv/bin"
+ExecStart=/opt/telemetry2/venv/bin/python app.py --config /opt/telemetry2/config.yaml
 Restart=always
 RestartSec=5
 
@@ -98,8 +98,8 @@ Then:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable modbus-decoder
-sudo systemctl start modbus-decoder
+sudo systemctl enable telemetry2
+sudo systemctl start telemetry2
 ```
 
 ## MQTT Topics
@@ -138,13 +138,16 @@ Payload format:
     {
       "addr": 46109,
       "name": "Engine Operating State",
-      "value": "Running",
-      "unit": "enum",
+      "value": 4,
+      "text": "Running",
+      "unit": null,
       "raw": 4
     }
   ]
 }
 ```
+
+> **Decoding rule:** If a register cannot be decoded → `value = null`, `raw = <number>`.
 
 ## Register Maps
 
@@ -160,10 +163,12 @@ All decoding logic is in external files (no hardcoded registers):
 
 From `full_addr`:
 - First character: region type (`4` = holding, `3` = input)
-- Last 5 digits: offset
+- Last 5 digits: offset (leading zeros preserved, e.g., `03560` → `3560`)
 - Address = 40000 + offset
 
-Example: `"406109"` → holding register 46109
+Examples:
+- `"406109"` → offset `06109` → address `46109`
+- `"403560"` → offset `03560` → address `43560`
 
 ### Data Types
 
@@ -235,7 +240,7 @@ Thresholds are configurable in `config.yaml`.
 ## Project Structure
 
 ```
-modbus-decoder/
+telemetry2/
 ├── app.py              # Main entry point
 ├── decoder.py          # Modbus decoder logic
 ├── maps_loader.py      # Register map loader
@@ -247,6 +252,8 @@ modbus-decoder/
 ├── config.example.yaml # Example configuration
 ├── requirements.txt    # Python dependencies
 ├── .gitignore          # Git ignore rules
+├── test_local.py       # Local test without MQTT
+├── mqtt_test_publisher.py # Test MQTT publisher
 └── maps/
     ├── register_map.jsonl
     ├── enum_map.json
