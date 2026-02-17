@@ -204,6 +204,9 @@ INDEX_TEMPLATE = '''
                 <td class="gps">
                     {% if router.gps_lat and router.gps_lon %}
                         📍 {{ "%.6f"|format(router.gps_lat) }}, {{ "%.6f"|format(router.gps_lon) }}
+                        {% if router.gps_alt is not none %} | Alt: {{ "%.1f"|format(router.gps_alt) }}m{% endif %}
+                        {% if router.gps_speed is not none %}<br>🚗 {{ "%.1f"|format(router.gps_speed) }} km/h{% endif %}
+                        {% if router.gps_satellites is not none %} | 🛰️ {{ router.gps_satellites }} sat{% endif %}
                         {% if router.gps_time %}<br>🕐 {{ router.gps_time }}{% endif %}
                     {% else %}
                         <span class="value-null">No GPS</span>
@@ -240,10 +243,12 @@ PANEL_TEMPLATE = '''
         <span class="status status-{{ panel.status.value }}">{{ panel.status.value }}</span>
     </h2>
     
-    {% if panel.gps_lat and panel.gps_lon %}
+    {% if router and router.gps_lat and router.gps_lon %}
     <p class="gps">
-        📍 {{ "%.6f"|format(panel.gps_lat) }}, {{ "%.6f"|format(panel.gps_lon) }}
-        {% if panel.gps_time %} | 🕐 {{ panel.gps_time }}{% endif %}
+        📍 {{ "%.6f"|format(router.gps_lat) }}, {{ "%.6f"|format(router.gps_lon) }}
+        {% if router.gps_speed is not none %} | 🚗 {{ "%.1f"|format(router.gps_speed) }} km/h{% endif %}
+        {% if router.gps_satellites is not none %} | 🛰️ {{ router.gps_satellites }} sat{% endif %}
+        {% if router.gps_time %} | 🕐 {{ router.gps_time }}{% endif %}
     </p>
     {% endif %}
     
@@ -331,6 +336,9 @@ def index():
             'sn': router.sn,
             'gps_lat': router.gps_lat,
             'gps_lon': router.gps_lon,
+            'gps_alt': router.gps_alt,
+            'gps_speed': router.gps_speed,
+            'gps_satellites': router.gps_satellites,
             'gps_time': router.gps_time,
             'panels': panels
         })
@@ -361,6 +369,7 @@ def panel_view(router_sn: str, bserver_id: int):
     if not panel:
         abort(404, f"Panel not found: {router_sn}:{bserver_id}")
     
+    router = store.get_router(router_sn)
     registers = store.get_panel_registers(router_sn, bserver_id)
     
     # Render content first
@@ -369,6 +378,7 @@ def panel_view(router_sn: str, bserver_id: int):
         router_sn=router_sn,
         bserver_id=bserver_id,
         panel=panel,
+        router=router,
         registers=registers
     )
     

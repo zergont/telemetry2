@@ -67,11 +67,30 @@ def simulate_telemetry():
             store.update_panel(
                 router_sn=router_sn,
                 bserver_id=bserver_id,
-                decoded_registers=decoded,
-                gps_lat=55.7558 + (hash(router_sn) % 100) / 10000,
-                gps_lon=37.6173 + (hash(router_sn) % 100) / 10000,
-                gps_time="2026-01-27T22:00:00+0300"
+                decoded_registers=decoded
             )
+        
+        # Simulate GPS updates for routers
+        store.update_router_gps("ROUTER-001", {
+            'latitude': 59.851780,
+            'longitude': 30.480843,
+            'altitude': 23.2,
+            'speed': 10.37,
+            'angle': 63.2,
+            'accuracy': 6.8,
+            'satellites': 4,
+            'fix_status': 1,
+            'date_iso_8601': '2026-02-16T20:54:47+0300'
+        })
+        store.update_router_gps("ROUTER-002", {
+            'latitude': 55.755800,
+            'longitude': 37.617300,
+            'altitude': 156.0,
+            'speed': 0.0,
+            'satellites': 8,
+            'fix_status': 1,
+            'date_iso_8601': '2026-02-16T21:00:00+0300'
+        })
         
         logger.info(f"Simulated {len(test_packets)} packets")
         time.sleep(5)

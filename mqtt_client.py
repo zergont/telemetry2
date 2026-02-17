@@ -88,6 +88,71 @@ class MqttClient:
             logger.error(f"Error processing message: {e}")
             self.decode_errors += 1
     
+    @staticmethod
+    def _normalize_one(inner: dict) -> Optional[dict]:
+        """
+        Normalize a single Modbus record into unified shape.
+        Returns { date_iso, server_id, full_addr (str), data_str } or None.
+        """
+        # Shape A: has full_addr (string "406109") — legacy Modbus_PCC
+        if 'full_addr' in inner:
+            return {
+                'date_iso':  inner.get('date_iso_8601'),
+                'server_id': inner.get('bserver_id') or inner.get('server_id'),
+                'full_addr': inner.get('full_addr'),
+                'data_str':  inner.get('data'),
+            }
+        
+        # Shape B: has addr (int offset) + data — PCC_3_3 / input2 etc.
+        if 'addr' in inner and 'data' in inner:
+            raw_addr = inner['addr']
+            full_addr = f"4{int(raw_addr):05d}"
+            return {
+                'date_iso':  inner.get('date_iso_8601'),
+                'server_id': inner.get('server_id') or inner.get('bserver_id'),
+                'full_addr': full_addr,
+                'data_str':  inner.get('data'),
+            }
+        
+        return None
+    
+    @staticmethod
+    def _normalize_raw(data: dict) -> list:
+        """
+        Raw Normalizer.
+        
+        Accepts any known payload shape and returns a LIST of unified dicts.
+        Handles both single-object and batched-array payloads:
+        
+          {"PCC_3_3": {"addr": ..., "data": ...}}            → [one record]
+          {"PCC_3_3": [{...}, {...}, {...}]}                  → [N records]
+          {"Modbus_PCC": {"full_addr": ..., "data": ...}}     → [one record]
+        
+        Returns empty list if nothing recognized.
+        """
+        results = []
+        
+        for key, value in data.items():
+            # Skip non-Modbus keys (e.g. GPS)
+            if not isinstance(value, (dict, list)):
+                continue
+            
+            # Single object
+            if isinstance(value, dict):
+                normalized = MqttClient._normalize_one(value)
+                if normalized:
+                    results.append(normalized)
+            
+            # Batched array of objects
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        normalized = MqttClient._normalize_one(item)
+                        if normalized:
+                            results.append(normalized)
+        
+        return results
+    
     def _process_message(self, topic: str, payload: bytes):
         """Process a raw telemetry message."""
         # Extract router SN from topic
@@ -107,40 +172,69 @@ class MqttClient:
             self.decode_errors += 1
             return
         
-        # Extract Modbus_PCC data
-        modbus_pcc = data.get('Modbus_PCC')
-        if not modbus_pcc:
+        # --- GPS message ---
+        gps_data = data.get('GPS')
+        if gps_data and isinstance(gps_data, dict):
+            self._process_gps(router_sn, gps_data)
+            return
+        
+        # --- Modbus PCC message (single or batched) ---
+        normalized_list = self._normalize_raw(data)
+        if not normalized_list:
             if self.debug_mode:
-                logger.debug(f"No Modbus_PCC in payload")
+                logger.debug(f"Unrecognized payload structure: {list(data.keys())}")
             return
         
-        # Extract fields
-        date_iso = modbus_pcc.get('date_iso_8601')
-        bserver_id = modbus_pcc.get('bserver_id')
-        full_addr = modbus_pcc.get('full_addr')
-        data_str = modbus_pcc.get('data')
+        if self.debug_mode and len(normalized_list) > 1:
+            logger.debug(f"Batch: {len(normalized_list)} packets in one message")
         
-        if bserver_id is None or full_addr is None or data_str is None:
-            logger.warning(f"Missing required fields in Modbus_PCC")
-            self.decode_errors += 1
-            return
-        
-        # Parse data array
-        try:
-            words = json.loads(data_str)
-            if not isinstance(words, list):
-                words = [words]
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid data array: {data_str}")
-            self.decode_errors += 1
-            return
+        for normalized in normalized_list:
+            self._process_pcc(router_sn, normalized)
+    
+    def _process_gps(self, router_sn: str, gps_data: dict):
+        """Process a GPS message and update router state."""
+        store = get_store()
+        store.update_router_gps(router_sn, gps_data)
         
         if self.debug_mode:
-            logger.debug(f"RAW: router={router_sn}, bserver={bserver_id}, addr={full_addr}, data={words}")
+            logger.debug(f"GPS: router={router_sn}, "
+                         f"lat={gps_data.get('latitude')}, "
+                         f"lon={gps_data.get('longitude')}, "
+                         f"sat={gps_data.get('satellites')}")
+    
+    def _process_pcc(self, router_sn: str, normalized: dict):
+        """Process a normalized Modbus PCC message."""
+        date_iso  = normalized['date_iso']
+        server_id = normalized['server_id']
+        full_addr = normalized['full_addr']
+        data_str  = normalized['data_str']
+        
+        if server_id is None or full_addr is None or data_str is None:
+            logger.warning(f"Missing required fields after normalization")
+            self.decode_errors += 1
+            return
+        
+        # Parse data array (may be a JSON string or already a list)
+        if isinstance(data_str, str):
+            try:
+                words = json.loads(data_str)
+                if not isinstance(words, list):
+                    words = [words]
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid data array: {data_str}")
+                self.decode_errors += 1
+                return
+        elif isinstance(data_str, list):
+            words = data_str
+        else:
+            words = [data_str]
+        
+        if self.debug_mode:
+            logger.debug(f"RAW: router={router_sn}, server={server_id}, addr={full_addr}, data={words}")
         
         # Decode
         decoder = get_decoder(debug_mode=self.debug_mode)
-        decoded_registers = decoder.decode_packet(full_addr, words)
+        decoded_registers = decoder.decode_packet(str(full_addr), words)
         
         if not decoded_registers:
             if self.debug_mode:
@@ -149,25 +243,16 @@ class MqttClient:
         
         self.messages_decoded += 1
         
-        # Update store
+        # Update store (GPS is handled separately)
         store = get_store()
-        
-        # Extract GPS if available (from top-level data)
-        gps_lat = data.get('gps_lat')
-        gps_lon = data.get('gps_lon')
-        gps_time = data.get('gps_time')
-        
         store.update_panel(
             router_sn=router_sn,
-            bserver_id=bserver_id,
-            decoded_registers=decoded_registers,
-            gps_lat=gps_lat,
-            gps_lon=gps_lon,
-            gps_time=date_iso or gps_time
+            bserver_id=server_id,
+            decoded_registers=decoded_registers
         )
         
         # Publish decoded data
-        self._publish_decoded(router_sn, bserver_id, decoded_registers, date_iso)
+        self._publish_decoded(router_sn, server_id, decoded_registers, date_iso)
     
     def _publish_decoded(self, router_sn: str, bserver_id: int, 
                          decoded_registers: list, timestamp: Optional[str]):

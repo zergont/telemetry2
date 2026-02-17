@@ -31,11 +31,6 @@ class PanelState:
     # Last message timestamp
     last_seen: float = 0.0
     
-    # GPS data (if available)
-    gps_lat: Optional[float] = None
-    gps_lon: Optional[float] = None
-    gps_time: Optional[str] = None
-    
     # Last decoded registers: addr -> decoded dict
     registers: Dict[int, dict] = field(default_factory=dict)
     
@@ -52,15 +47,21 @@ class RouterState:
     """State of a router (may have multiple panels)."""
     sn: str
     
-    # GPS data from last message
+    # GPS data (from GPS messages, not from panels)
     gps_lat: Optional[float] = None
     gps_lon: Optional[float] = None
+    gps_alt: Optional[float] = None
+    gps_speed: Optional[float] = None
+    gps_angle: Optional[float] = None
+    gps_accuracy: Optional[float] = None
+    gps_satellites: Optional[int] = None
+    gps_fix_status: Optional[int] = None
     gps_time: Optional[str] = None
     
     # Panel IDs connected to this router
     panel_ids: set = field(default_factory=set)
     
-    # Last seen timestamp
+    # Last seen timestamp (any message: GPS or PCC)
     last_seen: float = 0.0
 
 
@@ -112,13 +113,11 @@ class PanelStore:
             self._routers[router_sn] = RouterState(sn=router_sn)
         return self._routers[router_sn]
     
-    def update_panel(self, router_sn: str, bserver_id: int, 
-                     decoded_registers: List[dict],
-                     gps_lat: Optional[float] = None,
-                     gps_lon: Optional[float] = None,
-                     gps_time: Optional[str] = None) -> None:
+    def update_panel(self, router_sn: str, bserver_id: int,
+                     decoded_registers: List[dict]) -> None:
         """
         Update panel state with new decoded data.
+        GPS is updated separately via update_router_gps.
         """
         panel = self.get_or_create_panel(router_sn, bserver_id)
         
@@ -128,29 +127,49 @@ class PanelStore:
             panel.message_count += 1
             panel.status = PanelStatus.ONLINE
             
-            # Update GPS if provided
-            if gps_lat is not None:
-                panel.gps_lat = gps_lat
-            if gps_lon is not None:
-                panel.gps_lon = gps_lon
-            if gps_time is not None:
-                panel.gps_time = gps_time
-            
             # Update registers
             for reg in decoded_registers:
                 addr = reg.get('addr')
                 if addr is not None:
                     panel.registers[addr] = reg
             
-            # Update router
+            # Touch router last_seen
             router = self._ensure_router(router_sn)
             router.last_seen = now
-            if gps_lat is not None:
-                router.gps_lat = gps_lat
-            if gps_lon is not None:
-                router.gps_lon = gps_lon
-            if gps_time is not None:
-                router.gps_time = gps_time
+    
+    def update_router_gps(self, router_sn: str, gps_data: dict) -> None:
+        """
+        Update router GPS data from a GPS message.
+        
+        gps_data fields: latitude, longitude, altitude, speed, angle,
+                         accuracy, satellites, fix_status, date_iso_8601
+        """
+        with self._lock:
+            router = self._ensure_router(router_sn)
+            now = time.time()
+            router.last_seen = now
+            
+            if 'latitude' in gps_data:
+                router.gps_lat = gps_data['latitude']
+            if 'longitude' in gps_data:
+                router.gps_lon = gps_data['longitude']
+            if 'altitude' in gps_data:
+                router.gps_alt = gps_data['altitude']
+            if 'speed' in gps_data:
+                router.gps_speed = gps_data['speed']
+            if 'angle' in gps_data:
+                router.gps_angle = gps_data['angle']
+            if 'accuracy' in gps_data:
+                router.gps_accuracy = gps_data['accuracy']
+            if 'satellites' in gps_data:
+                router.gps_satellites = gps_data['satellites']
+            if 'fix_status' in gps_data:
+                router.gps_fix_status = gps_data['fix_status']
+            if 'date_iso_8601' in gps_data:
+                router.gps_time = gps_data['date_iso_8601']
+            
+            logger.debug(f"GPS updated for router {router_sn}: "
+                         f"{router.gps_lat}, {router.gps_lon}")
     
     def record_decode_error(self, router_sn: str, bserver_id: int) -> None:
         """Record a decode error for a panel."""
