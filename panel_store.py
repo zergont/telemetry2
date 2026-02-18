@@ -125,6 +125,8 @@ class PanelStore:
             now = time.time()
             panel.last_seen = now
             panel.message_count += 1
+            if panel.status != PanelStatus.ONLINE:
+                logger.info(f"Panel {router_sn}:{bserver_id} -> ONLINE")
             panel.status = PanelStatus.ONLINE
             
             # Update registers
@@ -194,6 +196,8 @@ class PanelStore:
                         logger.info(f"Panel {panel.router_sn}:{panel.bserver_id} -> STALE")
                     panel.status = PanelStatus.STALE
                 else:
+                    if panel.status != PanelStatus.ONLINE:
+                        logger.info(f"Panel {panel.router_sn}:{panel.bserver_id} -> ONLINE")
                     panel.status = PanelStatus.ONLINE
     
     def get_panel(self, router_sn: str, bserver_id: int) -> Optional[PanelState]:
