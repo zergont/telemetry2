@@ -1,8 +1,8 @@
 """
-Universal Modbus Decoder - Panel State Store
+Универсальный Modbus-декодер — Хранилище панелей
 
-In-memory storage for panel states and decoded data.
-Panels are discovered dynamically from incoming messages.
+In-memory хранилище состояний панелей и декодированных данных.
+Панели обнаруживаются динамически при получении данных.
 """
 
 import time
@@ -94,7 +94,7 @@ class PanelStore:
         
         with self._lock:
             if key not in self._panels:
-                logger.info(f"Discovered new panel: router={router_sn}, bserver_id={bserver_id}")
+                logger.info(f"Обнаружена новая панель: роутер={router_sn}, панель={bserver_id}")
                 self._panels[key] = PanelState(
                     router_sn=router_sn,
                     bserver_id=bserver_id
@@ -109,7 +109,7 @@ class PanelStore:
     def _ensure_router(self, router_sn: str) -> RouterState:
         """Ensure router exists."""
         if router_sn not in self._routers:
-            logger.info(f"Discovered new router: {router_sn}")
+            logger.info(f"Обнаружен новый роутер: {router_sn}")
             self._routers[router_sn] = RouterState(sn=router_sn)
         return self._routers[router_sn]
     
@@ -126,7 +126,7 @@ class PanelStore:
             panel.last_seen = now
             panel.message_count += 1
             if panel.status != PanelStatus.ONLINE:
-                logger.info(f"Panel {router_sn}:{bserver_id} -> ONLINE")
+                logger.info(f"Панель {router_sn}:{bserver_id} -> ONLINE")
             panel.status = PanelStatus.ONLINE
             
             # Update registers
@@ -170,7 +170,7 @@ class PanelStore:
             if 'date_iso_8601' in gps_data:
                 router.gps_time = gps_data['date_iso_8601']
             
-            logger.debug(f"GPS updated for router {router_sn}: "
+            logger.debug(f"GPS обновлён для роутера {router_sn}: "
                          f"{router.gps_lat}, {router.gps_lon}")
     
     def record_decode_error(self, router_sn: str, bserver_id: int) -> None:
@@ -189,15 +189,15 @@ class PanelStore:
                 
                 if age > self.offline_threshold:
                     if panel.status != PanelStatus.OFFLINE:
-                        logger.info(f"Panel {panel.router_sn}:{panel.bserver_id} -> OFFLINE")
+                        logger.info(f"Панель {panel.router_sn}:{panel.bserver_id} -> OFFLINE")
                     panel.status = PanelStatus.OFFLINE
                 elif age > self.stale_threshold:
                     if panel.status != PanelStatus.STALE:
-                        logger.info(f"Panel {panel.router_sn}:{panel.bserver_id} -> STALE")
+                        logger.info(f"Панель {panel.router_sn}:{panel.bserver_id} -> STALE")
                     panel.status = PanelStatus.STALE
                 else:
                     if panel.status != PanelStatus.ONLINE:
-                        logger.info(f"Panel {panel.router_sn}:{panel.bserver_id} -> ONLINE")
+                        logger.info(f"Панель {panel.router_sn}:{panel.bserver_id} -> ONLINE")
                     panel.status = PanelStatus.ONLINE
     
     def get_panel(self, router_sn: str, bserver_id: int) -> Optional[PanelState]:

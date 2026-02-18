@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Universal Modbus Decoder & Web UI
+Универсальный Modbus-декодер и Web UI
 
-Main entry point for the application.
-Starts all components: MQTT client, decoder, health monitor, web UI.
+Точка входа приложения.
+Запускает все компоненты: MQTT-клиент, декодер, монитор состояния, Web UI.
 
-Usage:
+Использование:
     python app.py [--config config.yaml]
 """
 
@@ -33,8 +33,8 @@ def load_config(config_path: str) -> dict:
     """Load configuration from YAML file."""
     path = Path(config_path)
     if not path.exists():
-        print(f"[ERROR] Config file not found: {config_path}")
-        print(f"[INFO] Copy config.example.yaml to config.yaml and adjust settings")
+        print(f"[ОШИБКА] Файл конфигурации не найден: {config_path}")
+        print(f"[ИНФО] Скопируйте config.example.yaml в config.yaml и настройте параметры")
         sys.exit(1)
     
     with open(path, 'r', encoding='utf-8') as f:
@@ -79,12 +79,12 @@ def print_status(ok: bool, message: str):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Universal Modbus Decoder & Web UI'
+        description='Универсальный Modbus-декодер и Web UI'
     )
     parser.add_argument(
         '--config', '-c',
         default='config.yaml',
-        help='Path to config file (default: config.yaml)'
+        help='Путь к файлу конфигурации (по умолчанию: config.yaml)'
     )
     parser.add_argument(
         '--version', '-v',
@@ -107,9 +107,9 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
     
     print("=" * 60)
-    print("Universal Modbus Decoder & Web UI")
-    print(f"Version: {__version__}")
-    print(f"Mode: {'DEBUG' if debug_mode else 'PRODUCTION'}")
+    print("Универсальный Modbus-декодер и Web UI")
+    print(f"Версия: {__version__}")
+    print(f"Режим: {'ОТЛАДКА' if debug_mode else 'ПРОДАКШН'}")
     print("=" * 60)
     
     # ================================================================
@@ -123,10 +123,10 @@ def main():
         fault_bitmap_path=maps_config.get('fault_bitmap_map', 'maps/fault_bitmap_map.jsonl')
     )
     
-    print_status(maps_ok, "maps loaded")
+    print_status(maps_ok, "карты загружены")
     
     if not maps_ok:
-        logger.error("Failed to load maps - exiting")
+        logger.error("Не удалось загрузить карты — выход")
         sys.exit(1)
     
     # ================================================================
@@ -139,7 +139,7 @@ def main():
         offline_threshold_sec=health_config.get('offline_threshold_sec', 60)
     )
     
-    print_status(True, "panel store initialized")
+    print_status(True, "хранилище панелей инициализировано")
     
     # ================================================================
     # Initialize health monitor
@@ -149,7 +149,7 @@ def main():
     )
     health_monitor.start()
     
-    print_status(True, "health monitor started")
+    print_status(True, "монитор состояния запущен")
     
     # ================================================================
     # Initialize and connect MQTT client
@@ -169,11 +169,11 @@ def main():
     )
     
     mqtt_connected = mqtt_client.connect()
-    print_status(mqtt_connected, "mqtt connected" if mqtt_connected else "mqtt connection failed (will retry)")
+    print_status(mqtt_connected, "MQTT подключен" if mqtt_connected else "MQTT не подключен (будет повторять)")
     
     if mqtt_connected:
         mqtt_client.start()
-        print_status(True, "decoder started")
+        print_status(True, "декодер запущен")
     
     # ================================================================
     # Start Web UI
@@ -192,10 +192,10 @@ def main():
     )
     web_thread.start()
     
-    print_status(True, f"web ui started on http://{web_config.get('host', '0.0.0.0')}:{web_config.get('port', 8080)}")
+    print_status(True, f"Web UI запущен на http://{web_config.get('host', '0.0.0.0')}:{web_config.get('port', 8080)}")
     
     print("=" * 60)
-    print("System running. Press Ctrl+C to stop.")
+    print("Система запущена. Нажмите Ctrl+C для остановки.")
     print("=" * 60)
     
     # ================================================================
@@ -204,7 +204,7 @@ def main():
     shutdown_event = threading.Event()
     
     def signal_handler(signum, frame):
-        logger.info("Shutdown signal received")
+        logger.info("Получен сигнал остановки")
         shutdown_event.set()
     
     signal.signal(signal.SIGINT, signal_handler)
@@ -218,13 +218,13 @@ def main():
         pass
     
     # Cleanup
-    logger.info("Shutting down...")
+    logger.info("Завершение работы...")
     
     mqtt_client.stop()
     health_monitor.stop()
     
-    logger.info("Shutdown complete")
-    print("\nGoodbye!")
+    logger.info("Работа завершена")
+    print("\nДо свидания!")
 
 
 if __name__ == '__main__':

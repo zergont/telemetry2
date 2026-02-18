@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Local Test Script
+Локальный тест
 
-Simulates data flow without MQTT for local testing.
-Populates the panel store with test data and starts web UI.
+Симулирует поток данных без MQTT.
+Заполняет хранилище тестовыми данными и запускает Web UI.
 
-Usage:
+Использование:
     python test_local.py
 """
 
@@ -56,7 +56,7 @@ def simulate_telemetry():
         ("ROUTER-002", 1, "400034", [75]),         # 75 kW
     ]
     
-    logger.info("Starting telemetry simulation...")
+    logger.info("Запуск симуляции телеметрии...")
     
     while True:
         for router_sn, bserver_id, full_addr, data in test_packets:
@@ -92,13 +92,13 @@ def simulate_telemetry():
             'date_iso_8601': '2026-02-16T21:00:00+0300'
         })
         
-        logger.info(f"Simulated {len(test_packets)} packets")
+        logger.info(f"Симулировано {len(test_packets)} пакетов")
         time.sleep(5)
 
 
 def main():
     print("=" * 60)
-    print("Universal Modbus Decoder - Local Test Mode")
+    print("Универсальный Modbus-декодер — Локальный тест")
     print("=" * 60)
     
     # Load maps
@@ -108,34 +108,34 @@ def main():
         'maps/fault_bitmap_map.jsonl'
     )
     if not ok:
-        print("[FAIL] Failed to load maps")
+        print("[ОШИБКА] Не удалось загрузить карты")
         return
-    print("[OK] Maps loaded")
+    print("[OK] Карты загружены")
     
     # Init store
     store = init_store(stale_threshold_sec=10, offline_threshold_sec=30)
-    print("[OK] Store initialized")
+    print("[OK] Хранилище инициализировано")
     
     # Init health monitor
     health = init_health_monitor(check_interval_sec=5)
     health.start()
-    print("[OK] Health monitor started")
+    print("[OK] Монитор состояния запущен")
     
     # Start telemetry simulation in background
     sim_thread = threading.Thread(target=simulate_telemetry, daemon=True)
     sim_thread.start()
-    print("[OK] Telemetry simulation started")
+    print("[OK] Симуляция телеметрии запущена")
     
-    print("[OK] Starting web UI on http://localhost:8080")
+    print("[OK] Web UI запускается на http://localhost:8080")
     print("=" * 60)
-    print("Open http://localhost:8080 in your browser")
-    print("Press Ctrl+C to stop")
+    print("Откройте http://localhost:8080 в браузере")
+    print("Нажмите Ctrl+C для остановки")
     print("=" * 60)
     
     try:
         run_web_ui(host='127.0.0.1', port=8080, debug=False)
     except KeyboardInterrupt:
-        print("\nShutdown...")
+        print("\nЗавершение...")
     finally:
         health.stop()
 

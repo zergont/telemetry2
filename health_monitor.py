@@ -1,7 +1,7 @@
 """
-Universal Modbus Decoder - Health Monitor
+Универсальный Modbus-декодер — Монитор состояния
 
-Monitors panel health status and updates periodically.
+Периодически проверяет состояние панелей и обновляет статусы.
 """
 
 import logging
@@ -33,7 +33,7 @@ class HealthMonitor:
             store = get_store()
             store.update_health_status()
         except Exception as e:
-            logger.error(f"Health check error: {e}")
+            logger.error(f"Ошибка проверки состояния: {e}")
     
     def start(self):
         """Start the health monitor."""
@@ -49,7 +49,7 @@ class HealthMonitor:
         )
         self._scheduler.start()
         self._running = True
-        logger.info(f"Health monitor started (interval: {self.check_interval}s)")
+        logger.info(f"Монитор состояния запущен (интервал: {self.check_interval}с)")
     
     def stop(self):
         """Stop the health monitor."""
@@ -57,7 +57,7 @@ class HealthMonitor:
             self._scheduler.shutdown(wait=False)
             self._scheduler = None
         self._running = False
-        logger.info("Health monitor stopped")
+        logger.info("Монитор состояния остановлен")
     
     def is_running(self) -> bool:
         """Check if monitor is running."""

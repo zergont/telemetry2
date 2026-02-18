@@ -1,84 +1,92 @@
-# Universal Modbus Decoder & Web UI
+# Универсальный Modbus-декодер и Web UI
 
-A server application that:
-- Receives raw Modbus telemetry via MQTT
-- Decodes data using external register maps (no hardcoded registers)
-- Publishes decoded data to a separate MQTT topic
-- Displays data through a simple Web UI
-- Works in-memory (no database)
+Серверное приложение, которое:
+- Принимает raw Modbus-телеметрию через MQTT
+- Декодирует данные по внешним картам регистров (без хардкода)
+- Публикует decoded-данные в отдельный MQTT-топик
+- Отображает данные через простой Web UI
+- Работает in-memory (без БД)
 
-Designed for Cummins PCC but architecture is universal.
+Ориентировано на Cummins PCC, но архитектура универсальна.
 
-## Features
+## Возможности
 
-- **Dynamic panel discovery** - panels are discovered from incoming messages
-- **Health monitoring** - panels marked as `stale` (>10s) or `offline` (>60s)
-- **MQTT auto-reconnect** - automatic reconnection on connection loss
-- **External register maps** - all decoding logic from JSONL/JSON files
-- **Simple Web UI** - view routers, panels, and decoded registers
-- **Debug mode** - verbose logging for troubleshooting
+- **Динамическое обнаружение панелей** — панели определяются автоматически из входящих сообщений
+- **Пакетная обработка** — поддержка одиночных и батчевых payload (массив пакетов в одном сообщении)
+- **GPS** — отображение координат, скорости, спутников роутера
+- **Мониторинг состояния** — панели помечаются как `stale` (>30с) или `offline` (>120с)
+- **Автопереподключение MQTT** — автоматическое восстановление соединения
+- **Внешние карты регистров** — вся логика декодирования из JSONL/JSON файлов
+- **Web UI** — просмотр роутеров, панелей и декодированных регистров
+- **Режим отладки** — подробное логирование для диагностики
 
-## Requirements
+## Требования
 
 - Python 3.10+
-- MQTT broker (e.g., Mosquitto)
+- MQTT-брокер (например Mosquitto)
 
-## Installation on Ubuntu
+## Установка на Ubuntu
 
-### 1. Clone the repository
+### 1. Клонировать репозиторий
 
 ```bash
 git clone https://github.com/zergont/telemetry2.git
 cd telemetry2
 ```
 
-### 2. Create virtual environment
+### 2. Создать виртуальное окружение
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Install dependencies
+### 3. Установить зависимости
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure
+### 4. Настроить конфигурацию
 
 ```bash
 cp config.example.yaml config.yaml
 nano config.yaml
 ```
 
-Edit the configuration file:
+Основные параметры:
 
-- Set `mqtt.host` to your MQTT broker address
-- Set `mqtt.port` (default: 1883)
-- Set `mqtt.username` and `mqtt.password` if authentication is required
-- Set `web.port` for the Web UI (default: 8080)
-- Set `mode` to `debug` for verbose logging
+- `mqtt.host` — адрес MQTT-брокера
+- `mqtt.port` — порт (по умолчанию: 1883)
+- `mqtt.username` и `mqtt.password` — если требуется авторизация
+- `web.port` — порт Web UI (по умолчанию: 8080)
+- `mode` — `debug` для подробного логирования
 
-### 5. Run
+### 5. Запустить
 
 ```bash
 python app.py
 ```
 
-Or with a custom config file:
+Или с указанием конфига:
 
 ```bash
-python app.py --config /path/to/config.yaml
+python app.py --config /путь/к/config.yaml
 ```
 
-## Running as a Service (systemd)
+## Автозапуск при перезагрузке (systemd)
 
-Create `/etc/systemd/system/telemetry2.service`:
+### Создать файл сервиса
+
+```bash
+sudo nano /etc/systemd/system/telemetry2.service
+```
+
+Содержимое:
 
 ```ini
 [Unit]
-Description=Universal Modbus Decoder (telemetry2)
+Description=Универсальный Modbus-декодер (telemetry2)
 After=network.target
 
 [Service]
@@ -94,7 +102,9 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Then:
+> Замените `youruser` на имя пользователя, под которым запускается сервис.
+
+### Активировать и запустить
 
 ```bash
 sudo systemctl daemon-reload
@@ -102,38 +112,80 @@ sudo systemctl enable telemetry2
 sudo systemctl start telemetry2
 ```
 
-## MQTT Topics
+### Полезные команды
 
-### RAW (input)
+```bash
+# Статус сервиса
+sudo systemctl status telemetry2
+
+# Логи в реальном времени
+sudo journalctl -u telemetry2 -f
+
+# Перезапустить после изменений
+sudo systemctl restart telemetry2
+
+# Отключить автозапуск
+sudo systemctl disable telemetry2
+```
+
+После `systemctl enable` сервис будет **автоматически запускаться при каждой перезагрузке** системы.
+
+## MQTT-топики
+
+### RAW (вход)
 
 ```
 cg/v1/telemetry/SN/<router_sn>
 ```
 
-Payload format:
+Формат payload (одиночный пакет):
 ```json
 {
-  "Modbus_PCC": {
+  "PCC_3_3": {
     "date_iso_8601": "2026-01-27T21:59:49+0300",
-    "bserver_id": 2,
-    "full_addr": "406109",
+    "server_id": 1,
+    "addr": 6109,
     "data": "[0]"
   }
 }
 ```
 
-### DECODED (output)
+Формат payload (батч — несколько пакетов):
+```json
+{
+  "PCC_3_3": [
+    {"date_iso_8601": "2026-02-17T14:23:10+0300", "server_id": 1, "addr": 290, "data": "[65,53267]"},
+    {"date_iso_8601": "2026-02-17T14:23:10+0300", "server_id": 2, "addr": 290, "data": "[352,35616]"}
+  ]
+}
+```
+
+GPS-сообщение:
+```json
+{
+  "GPS": {
+    "latitude": 59.851780,
+    "longitude": 30.480843,
+    "altitude": 23.2,
+    "speed": 10.37,
+    "satellites": 4,
+    "date_iso_8601": "2026-02-16T20:54:47+0300"
+  }
+}
+```
+
+### DECODED (выход)
 
 ```
-cg/v1/decoded/SN/<router_sn>/pcc/<bserver_id>
+cg/v1/decoded/SN/<router_sn>/pcc/<server_id>
 ```
 
-Payload format:
+Формат payload:
 ```json
 {
   "timestamp": "2026-01-27T21:59:49+0300",
-  "router_sn": "SN123456",
-  "bserver_id": 2,
+  "router_sn": "6003790403",
+  "bserver_id": 1,
   "registers": [
     {
       "addr": 46109,
@@ -147,49 +199,50 @@ Payload format:
 }
 ```
 
-> **Decoding rule:** If a register cannot be decoded → `value = null`, `raw = <number>`.
+> **Правило декодирования:** если регистр не удалось декодировать → `value = null`, `raw = <число>`.
 
-## Register Maps
+## Карты регистров
 
-All decoding logic is in external files (no hardcoded registers):
+Вся логика декодирования во внешних файлах (хардкод регистров запрещён):
 
-| File | Format | Description |
-|------|--------|-------------|
-| `maps/register_map.jsonl` | JSONL | Register definitions (address, type, multiplier, etc.) |
-| `maps/enum_map.json` | JSON | Enum value-to-label mappings |
-| `maps/fault_bitmap_map.jsonl` | JSONL | Fault bitmap bit definitions |
+| Файл | Формат | Описание |
+|------|--------|----------|
+| `maps/register_map.jsonl` | JSONL | Определения регистров (адрес, тип, множитель и т.д.) |
+| `maps/enum_map.json` | JSON | Маппинг enum: значение → текст |
+| `maps/fault_bitmap_map.jsonl` | JSONL | Определения битов fault bitmap |
 
-### Address Decoding
+### Декодирование адреса
 
-From `full_addr`:
-- First character: region type (`4` = holding, `3` = input)
-- Last 5 digits: offset (leading zeros preserved, e.g., `03560` → `3560`)
-- Address = 40000 + offset
+Из `full_addr` (строка) или `addr` (число):
+- Строка `"406109"`: первый символ — тип области (`4` = holding, `3` = input), последние 5 цифр — смещение
+- Число `6109`: смещение напрямую, тип holding по умолчанию
+- Итоговый адрес = 40000 + смещение
 
-Examples:
-- `"406109"` → offset `06109` → address `46109`
-- `"403560"` → offset `03560` → address `43560`
+Примеры:
+- `"406109"` → смещение `06109` → адрес `46109`
+- `addr: 6109` → адрес `46109`
+- `"403560"` → смещение `03560` → адрес `43560`
 
-### Data Types
+### Типы данных
 
-| Type | Description | Words |
-|------|-------------|-------|
-| `u16` | Unsigned 16-bit | 1 |
-| `s16` | Signed 16-bit | 1 |
-| `u32` | Unsigned 32-bit (big-endian) | 2 |
-| `s32` | Signed 32-bit | 2 |
+| Тип | Описание | Слов |
+|-----|----------|------|
+| `u16` | Беззнаковое 16-бит | 1 |
+| `s16` | Знаковое 16-бит | 1 |
+| `u32` | Беззнаковое 32-бит (big-endian) | 2 |
+| `s32` | Знаковое 32-бит | 2 |
 | `f32` | IEEE754 float | 2 |
-| `enum` | Enum value | 1 |
-| `bitfield` | Bitmap | 1 |
+| `enum` | Перечисление | 1 |
+| `bitfield` | Битовая маска | 1 |
 
-### Multiword Registers (Variant B)
+### Многословные регистры (вариант B)
 
-- 32-bit values published as single entry at base address
-- Tail registers not published
+- 32-битные значения публикуются одной записью по базовому адресу
+- Хвостовые регистры не публикуются
 
-## Operating Modes
+## Режимы работы
 
-### Production (default)
+### Production (по умолчанию)
 
 ```yaml
 mode: "production"
@@ -197,8 +250,8 @@ logging:
   level: "INFO"
 ```
 
-- Minimal logging
-- No debug information in decoded output
+- Минимальное логирование
+- Без отладочной информации
 
 ### Debug
 
@@ -208,62 +261,62 @@ logging:
   level: "DEBUG"
 ```
 
-- Verbose logging
-- Raw input/output in logs
-- Decode failure reasons included
+- Подробное логирование
+- RAW вход/выход в логах
+- Причины `value=null`
 
 ## Web UI
 
-Access at `http://localhost:8080` (or configured port).
+Доступен по адресу `http://localhost:8080` (или настроенный порт).
 
-### Pages
+### Страницы
 
-- **Dashboard** (`/`) - List of routers, panels, MQTT stats
-- **Panel** (`/router/<sn>/panel/<id>`) - Register table for a panel
+- **Главная** (`/`) — список роутеров, панелей, статистика MQTT
+- **Панель** (`/router/<sn>/panel/<id>`) — таблица регистров панели
 
-### API Endpoints
+### API
 
-- `GET /api/stats` - System statistics
-- `GET /api/routers` - List of routers
-- `GET /api/router/<sn>/panel/<id>/registers` - Panel registers as JSON
+- `GET /api/stats` — системная статистика
+- `GET /api/routers` — список роутеров
+- `GET /api/router/<sn>/panel/<id>/registers` — регистры панели (JSON)
 
-## Health Monitoring
+## Мониторинг состояния
 
-| Status | Condition |
-|--------|-----------|
-| `online` | Message within last 10 seconds |
-| `stale` | No message for 10-60 seconds |
-| `offline` | No message for 60+ seconds |
+| Статус | Условие |
+|--------|---------|
+| `online` | Сообщение получено в пределах stale-порога |
+| `stale` | Нет сообщений дольше stale-порога |
+| `offline` | Нет сообщений дольше offline-порога |
 
-Thresholds are configurable in `config.yaml`.
+Пороги настраиваются в `config.yaml` (секция `health`).
 
-## Project Structure
+## Структура проекта
 
 ```
 telemetry2/
-├── app.py              # Main entry point
-├── decoder.py          # Modbus decoder logic
-├── maps_loader.py      # Register map loader
-├── mqtt_client.py      # MQTT client
-├── panel_store.py      # In-memory panel store
-├── health_monitor.py   # Health monitoring
-├── web_ui.py           # Flask web UI
-├── config.yaml         # Configuration (not in git)
-├── config.example.yaml # Example configuration
-├── requirements.txt    # Python dependencies
-├── .gitignore          # Git ignore rules
-├── test_local.py       # Local test without MQTT
-├── mqtt_test_publisher.py # Test MQTT publisher
+├── app.py              # Точка входа
+├── decoder.py          # Логика декодирования Modbus
+├── maps_loader.py      # Загрузчик карт регистров
+├── mqtt_client.py      # MQTT-клиент + нормализатор
+├── panel_store.py      # In-memory хранилище панелей
+├── health_monitor.py   # Мониторинг состояния
+├── web_ui.py           # Web UI (Flask)
+├── config.yaml         # Конфигурация (не в git)
+├── config.example.yaml # Пример конфигурации
+├── requirements.txt    # Python-зависимости
+├── .gitignore          # Правила Git
+├── test_local.py       # Локальный тест без MQTT
+├── mqtt_test_publisher.py # Тестовый MQTT-публикатор
 └── maps/
     ├── register_map.jsonl
     ├── enum_map.json
     └── fault_bitmap_map.jsonl
 ```
 
-## License
+## Лицензия
 
 MIT
 
-## Support
+## Поддержка
 
-For issues or questions, please open a GitHub issue.
+По вопросам и проблемам — создайте Issue на GitHub.

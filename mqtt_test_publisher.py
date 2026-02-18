@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-MQTT Test Publisher
+Тестовый MQTT-публикатор
 
-Simulates raw Modbus telemetry for testing the decoder.
-Publishes to cg/v1/telemetry/SN/<router_sn>
+Симулирует raw Modbus-телеметрию для тестирования декодера.
+Публикует в cg/v1/telemetry/SN/<router_sn>
 
-Usage:
+Использование:
     python mqtt_test_publisher.py [--host localhost] [--port 1883]
 """
 
@@ -17,7 +17,7 @@ from datetime import datetime
 try:
     import paho.mqtt.client as mqtt
 except ImportError:
-    print("paho-mqtt not installed. Run: pip install paho-mqtt")
+    print("paho-mqtt не установлен. Запустите: pip install paho-mqtt")
     exit(1)
 
 
@@ -34,21 +34,21 @@ def create_payload(server_id: int, addr: int, data: list) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='MQTT Test Publisher')
-    parser.add_argument('--host', default='localhost', help='MQTT broker host')
-    parser.add_argument('--port', type=int, default=1883, help='MQTT broker port')
-    parser.add_argument('--router', default='TEST-ROUTER-001', help='Router SN')
+    parser = argparse.ArgumentParser(description='Тестовый MQTT-публикатор')
+    parser.add_argument('--host', default='localhost', help='Хост MQTT-брокера')
+    parser.add_argument('--port', type=int, default=1883, help='Порт MQTT-брокера')
+    parser.add_argument('--router', default='TEST-ROUTER-001', help='Серийный номер роутера')
     args = parser.parse_args()
     
     client = mqtt.Client(client_id="test-publisher", protocol=mqtt.MQTTv5)
     
     try:
-        print(f"Connecting to {args.host}:{args.port}...")
+        print(f"Подключение к {args.host}:{args.port}...")
         client.connect(args.host, args.port)
         client.loop_start()
-        print("Connected!")
+        print("Подключено!")
     except Exception as e:
-        print(f"Failed to connect: {e}")
+        print(f"Ошибка подключения: {e}")
         return
     
     topic = f"cg/v1/telemetry/SN/{args.router}"
@@ -77,14 +77,14 @@ def main():
         (1, 563, [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 50000, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65535, 0, 0, 65535, 0, 0]),
     ]
     
-    print(f"\nPublishing test data to {topic}...")
-    print("Press Ctrl+C to stop\n")
+    print(f"\nПубликация тестовых данных в {topic}...")
+    print("Нажмите Ctrl+C для остановки\n")
     
     try:
         cycle = 0
         while True:
             cycle += 1
-            print(f"--- Cycle {cycle} ---")
+            print(f"--- Цикл {cycle} ---")
             
             for server_id, addr, data in test_data:
                 payload = create_payload(server_id, addr, data)
@@ -97,11 +97,11 @@ def main():
                 
                 time.sleep(0.5)
             
-            print(f"\nWaiting 5 seconds before next cycle...\n")
+            print(f"\nОжидание 5 секунд до следующего цикла...\n")
             time.sleep(5)
             
     except KeyboardInterrupt:
-        print("\nStopped.")
+        print("\nОстановлено.")
     finally:
         client.loop_stop()
         client.disconnect()

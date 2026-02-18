@@ -1,8 +1,8 @@
 """
-Universal Modbus Decoder - Core Decoder Module
+Универсальный Modbus-декодер — Модуль декодирования
 
-Decodes raw Modbus data using register maps.
-No hardcoded register definitions.
+Декодирует raw Modbus-данные по картам регистров.
+Хардкод регистров запрещён.
 """
 
 import json
@@ -48,7 +48,7 @@ class ModbusDecoder:
         else:
             reg_type = 'holding'  # Default
             if self.debug_mode:
-                logger.warning(f"Unknown region code '{region_code}', defaulting to holding")
+                logger.warning(f"Неизвестный код области '{region_code}', используется holding")
         
         # Calculate address: base + offset
         offset = int(offset_str)
@@ -73,7 +73,7 @@ class ModbusDecoder:
         
         # Check if we have enough words
         if word_idx + word_len > len(words):
-            return None, None, f"Not enough words: need {word_len}, have {len(words) - word_idx}"
+            return None, None, f"Недостаточно слов: нужно {word_len}, есть {len(words) - word_idx}"
         
         raw_value = None
         decoded_value = None
@@ -83,7 +83,7 @@ class ModbusDecoder:
                 # Single 16-bit unsigned
                 raw_value = words[word_idx]
                 if raw_value in na_values:
-                    return None, raw_value, "NA value"
+                    return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
                 
             elif data_type == 's16':
@@ -93,7 +93,7 @@ class ModbusDecoder:
                 if raw_value >= 0x8000:
                     raw_value = raw_value - 0x10000
                 if raw_value in na_values:
-                    return None, raw_value, "NA value"
+                    return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
                 
             elif data_type == 'u32':
@@ -102,7 +102,7 @@ class ModbusDecoder:
                 lo = words[word_idx + 1] if word_idx + 1 < len(words) else 0
                 raw_value = (hi << 16) | lo
                 if raw_value in na_values:
-                    return None, raw_value, "NA value"
+                    return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
                 
             elif data_type == 's32':
@@ -114,7 +114,7 @@ class ModbusDecoder:
                 if raw_value >= 0x80000000:
                     raw_value = raw_value - 0x100000000
                 if raw_value in na_values:
-                    return None, raw_value, "NA value"
+                    return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
                 
             elif data_type == 'f32':
@@ -126,7 +126,7 @@ class ModbusDecoder:
                 try:
                     decoded_value = struct.unpack('>f', struct.pack('>I', raw_value))[0]
                 except:
-                    return None, raw_value, "Float conversion failed"
+                    return None, raw_value, "Ошибка конвертации float"
                     
             elif data_type == 'char':
                 # Character string - return raw words
@@ -145,10 +145,10 @@ class ModbusDecoder:
                 raw_value = words[word_idx]
                 decoded_value = raw_value
                 if self.debug_mode:
-                    logger.warning(f"Unknown data_type '{data_type}', treating as u16")
+                    logger.warning(f"Неизвестный data_type '{data_type}', обработка как u16")
         
         except Exception as e:
-            return None, raw_value, f"Decode error: {str(e)}"
+            return None, raw_value, f"Ошибка декодирования: {str(e)}"
         
         return decoded_value, raw_value, None
     
@@ -232,9 +232,9 @@ class ModbusDecoder:
             # Unknown register
             if words:
                 result['raw'] = words[0]
-            result['reason'] = "Unknown register"
+            result['reason'] = "Неизвестный регистр"
             if self.debug_mode:
-                logger.debug(f"Unknown register {reg_type}:{addr}")
+                logger.debug(f"Неизвестный регистр {reg_type}:{addr}")
             return result
         
         # Fill in known fields
@@ -248,7 +248,7 @@ class ModbusDecoder:
         if reason:
             result['reason'] = reason
             if self.debug_mode:
-                logger.debug(f"Decode failed for {addr}: {reason}")
+                logger.debug(f"Ошибка декодирования {addr}: {reason}")
             return result
         
         # Handle special types
@@ -263,7 +263,7 @@ class ModbusDecoder:
             if enum_label:
                 result['text'] = enum_label
             elif self.debug_mode:
-                logger.debug(f"No enum definition for {addr}={raw}")
+                logger.debug(f"Нет определения enum для {addr}={raw}")
                     
         elif data_type == 'bitfield':
             # Check if this is a fault bitmap
@@ -298,7 +298,7 @@ class ModbusDecoder:
         try:
             reg_type, base_addr = self.parse_full_addr(full_addr)
         except ValueError as e:
-            logger.error(f"Failed to parse full_addr '{full_addr}': {e}")
+            logger.error(f"Ошибка разбора full_addr '{full_addr}': {e}")
             return []
         
         results = []

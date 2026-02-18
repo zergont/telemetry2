@@ -1,8 +1,8 @@
 """
-Universal Modbus Decoder - Register Map Loader
+Универсальный Modbus-декодер — Загрузчик карт регистров
 
-Loads and provides access to register maps, enum maps, and fault bitmap maps.
-No hardcoded register definitions - all data comes from external files.
+Загружает карты регистров, enum и fault bitmap из внешних файлов.
+Хардкод регистров запрещён — все данные из файлов.
 """
 
 import json
@@ -39,7 +39,7 @@ class RegisterMapLoader:
         """
         path = Path(filepath)
         if not path.exists():
-            logger.error(f"Register map file not found: {filepath}")
+            logger.error(f"Файл карты регистров не найден: {filepath}")
             return 0
         
         count = 0
@@ -57,9 +57,9 @@ class RegisterMapLoader:
                         self._register_map[key] = entry
                         count += 1
                 except json.JSONDecodeError as e:
-                    logger.warning(f"Invalid JSON at line {line_num} in {filepath}: {e}")
+                    logger.warning(f"Невалидный JSON в строке {line_num} файла {filepath}: {e}")
         
-        logger.info(f"Loaded {count} register definitions from {filepath}")
+        logger.info(f"Загружено {count} определений регистров из {filepath}")
         return count
     
     def load_enum_map(self, filepath: str) -> int:
@@ -69,17 +69,17 @@ class RegisterMapLoader:
         """
         path = Path(filepath)
         if not path.exists():
-            logger.error(f"Enum map file not found: {filepath}")
+            logger.error(f"Файл enum не найден: {filepath}")
             return 0
         
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 self._enum_map = json.load(f)
             count = len(self._enum_map)
-            logger.info(f"Loaded {count} enum definitions from {filepath}")
+            logger.info(f"Загружено {count} определений enum из {filepath}")
             return count
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in {filepath}: {e}")
+            logger.error(f"Невалидный JSON в {filepath}: {e}")
             return 0
     
     def load_fault_bitmap_map(self, filepath: str) -> int:
@@ -89,7 +89,7 @@ class RegisterMapLoader:
         """
         path = Path(filepath)
         if not path.exists():
-            logger.error(f"Fault bitmap map file not found: {filepath}")
+            logger.error(f"Файл fault bitmap не найден: {filepath}")
             return 0
         
         count = 0
@@ -109,9 +109,9 @@ class RegisterMapLoader:
                         self._fault_addresses.add(f"{reg_type}:{addr}")
                         count += 1
                 except json.JSONDecodeError as e:
-                    logger.warning(f"Invalid JSON at line {line_num} in {filepath}: {e}")
+                    logger.warning(f"Невалидный JSON в строке {line_num} файла {filepath}: {e}")
         
-        logger.info(f"Loaded {count} fault bitmap definitions from {filepath}")
+        logger.info(f"Загружено {count} определений fault bitmap из {filepath}")
         return count
     
     def get_register(self, reg_type: str, addr: int) -> Optional[dict]:
@@ -165,7 +165,7 @@ def load_all_maps(register_map_path: str, enum_map_path: str, fault_bitmap_path:
     fault_count = loader.load_fault_bitmap_map(fault_bitmap_path)
     
     if reg_count == 0:
-        logger.error("No registers loaded - decoder will not work")
+        logger.error("Ни один регистр не загружен — декодер не будет работать")
         return False
     
     return True

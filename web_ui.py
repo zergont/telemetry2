@@ -1,8 +1,8 @@
 """
-Universal Modbus Decoder - Web UI
+Универсальный Modbus-декодер — Web UI
 
-Simple Flask-based web interface for viewing decoded data.
-UI reads only decoded data - knows nothing about Modbus.
+Простой веб-интерфейс на Flask для просмотра декодированных данных.
+UI не знает ничего о Modbus — только отображает декодированные данные.
 """
 
 import logging
@@ -29,7 +29,7 @@ def wrap_content(title: str, content: str) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title} - Modbus Decoder</title>
+    <title>{title} - Modbus-декодер</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{ 
@@ -128,14 +128,14 @@ def wrap_content(title: str, content: str) -> str:
 <body>
     <header>
         <div class="container">
-            <h1>🔌 Universal Modbus Decoder</h1>
+            <h1>🔌 Универсальный Modbus-декодер</h1>
         </div>
     </header>
     <div class="container">
         {content}
     </div>
     <script>
-        // Auto-refresh every 5 seconds
+        // Автообновление каждые 5 секунд
         setTimeout(function() {{ location.reload(); }}, 5000);
     </script>
 </body>
@@ -147,54 +147,54 @@ INDEX_TEMPLATE = '''
 <div class="stats">
     <div class="stat-box success">
         <div class="stat-value">{{ stats.routers }}</div>
-        <div class="stat-label">Routers</div>
+        <div class="stat-label">Роутеры</div>
     </div>
     <div class="stat-box">
         <div class="stat-value">{{ stats.panels }}</div>
-        <div class="stat-label">Panels</div>
+        <div class="stat-label">Панели</div>
     </div>
     <div class="stat-box success">
         <div class="stat-value">{{ stats.online }}</div>
-        <div class="stat-label">Online</div>
+        <div class="stat-label">Онлайн</div>
     </div>
     <div class="stat-box warning">
         <div class="stat-value">{{ stats.stale }}</div>
-        <div class="stat-label">Stale</div>
+        <div class="stat-label">Нет данных</div>
     </div>
     <div class="stat-box error">
         <div class="stat-value">{{ stats.offline }}</div>
-        <div class="stat-label">Offline</div>
+        <div class="stat-label">Офлайн</div>
     </div>
 </div>
 
 {% if mqtt_stats %}
 <div class="card">
-    <h2>📡 MQTT Status</h2>
+    <h2>📡 Статус MQTT</h2>
     <table>
         <tr>
-            <td>Connection</td>
+            <td>Соединение</td>
             <td><span class="status {% if mqtt_stats.connected %}status-online{% else %}status-offline{% endif %}">
-                {{ 'Connected' if mqtt_stats.connected else 'Disconnected' }}
+                {{ 'Подключен' if mqtt_stats.connected else 'Отключен' }}
             </span></td>
         </tr>
-        <tr><td>Messages Received</td><td>{{ mqtt_stats.messages_received }}</td></tr>
-        <tr><td>Messages Decoded</td><td>{{ mqtt_stats.messages_decoded }}</td></tr>
-        <tr><td>Messages Published</td><td>{{ mqtt_stats.messages_published }}</td></tr>
-        <tr><td>Decode Errors</td><td>{{ mqtt_stats.decode_errors }}</td></tr>
+        <tr><td>Получено сообщений</td><td>{{ mqtt_stats.messages_received }}</td></tr>
+        <tr><td>Декодировано</td><td>{{ mqtt_stats.messages_decoded }}</td></tr>
+        <tr><td>Опубликовано</td><td>{{ mqtt_stats.messages_published }}</td></tr>
+        <tr><td>Ошибки декодирования</td><td>{{ mqtt_stats.decode_errors }}</td></tr>
     </table>
 </div>
 {% endif %}
 
 <div class="card">
-    <h2>🏭 Routers & Panels</h2>
+    <h2>🏭 Роутеры и панели</h2>
     {% if routers %}
     <table>
         <thead>
             <tr>
-                <th>Router SN</th>
+                <th>Роутер SN</th>
                 <th>GPS</th>
-                <th>Panels</th>
-                <th>Status</th>
+                <th>Панели</th>
+                <th>Статус</th>
             </tr>
         </thead>
         <tbody>
@@ -209,37 +209,37 @@ INDEX_TEMPLATE = '''
                         {% if router.gps_satellites is not none %} | 🛰️ {{ router.gps_satellites }} sat{% endif %}
                         {% if router.gps_time %}<br>🕐 {{ router.gps_time }}{% endif %}
                     {% else %}
-                        <span class="value-null">No GPS</span>
+                        <span class="value-null">Нет GPS</span>
                     {% endif %}
                 </td>
                 <td>
                     {% for panel in router.panels %}
                         <a href="/router/{{ router.sn }}/panel/{{ panel.bserver_id }}" class="btn">
-                            Panel {{ panel.bserver_id }}
+                            Панель {{ panel.bserver_id }}
                             <span class="status status-{{ panel.status.value }}">{{ panel.status.value }}</span>
                         </a>
                     {% endfor %}
                 </td>
                 <td>
-                    {{ router.panels|length }} panel(s)
+                    {{ router.panels|length }} панел(ь/ей)
                 </td>
             </tr>
         {% endfor %}
         </tbody>
     </table>
     {% else %}
-    <p>No routers discovered yet. Waiting for telemetry data...</p>
+    <p>Роутеры ещё не обнаружены. Ожидание телеметрии...</p>
     {% endif %}
 </div>
 
-<div class="refresh-info">Auto-refresh in 5 seconds</div>
+<div class="refresh-info">Автообновление через 5 секунд</div>
 '''
 
 PANEL_TEMPLATE = '''
 <div class="card">
     <h2>
-        <a href="/">← Back</a> | 
-        Router: {{ router_sn }} | Panel: {{ bserver_id }}
+        <a href="/">← Назад</a> | 
+        Роутер: {{ router_sn }} | Панель: {{ bserver_id }}
         <span class="status status-{{ panel.status.value }}">{{ panel.status.value }}</span>
     </h2>
     
@@ -252,19 +252,19 @@ PANEL_TEMPLATE = '''
     </p>
     {% endif %}
     
-    <p>Messages: {{ panel.message_count }} | Errors: {{ panel.decode_error_count }}</p>
+    <p>Сообщений: {{ panel.message_count }} | Ошибок: {{ panel.decode_error_count }}</p>
 </div>
 
 <div class="card">
-    <h2>📊 Registers ({{ registers|length }})</h2>
+    <h2>📊 Регистры ({{ registers|length }})</h2>
     {% if registers %}
     <table>
         <thead>
             <tr>
-                <th>Addr</th>
-                <th>Name</th>
-                <th>Value</th>
-                <th>Unit</th>
+                <th>Адрес</th>
+                <th>Имя</th>
+                <th>Значение</th>
+                <th>Ед.изм.</th>
                 <th>Raw</th>
             </tr>
         </thead>
@@ -286,10 +286,10 @@ PANEL_TEMPLATE = '''
                             </span>
                         {% endif %}
                         {% if reg.value.unknown_bits %}
-                            <span class="raw-value">Unknown bits: {{ reg.value.unknown_bits|join(', ') }}</span>
+                        <span class="raw-value">Неизвестные биты: {{ reg.value.unknown_bits|join(', ') }}</span>
                         {% endif %}
                         {% if not reg.value.faults and not reg.value.unknown_bits %}
-                            <span class="value-null">No active faults</span>
+                            <span class="value-null">Нет активных ошибок</span>
                         {% endif %}
                     {% elif reg.unit == 'bitfield' %}
                         {{ reg.value.hex }} (bits: {{ reg.value.active_bits|join(', ') or 'none' }})
@@ -308,11 +308,11 @@ PANEL_TEMPLATE = '''
         </tbody>
     </table>
     {% else %}
-    <p>No registers received yet.</p>
+    <p>Регистры ещё не получены.</p>
     {% endif %}
 </div>
 
-<div class="refresh-info">Auto-refresh in 5 seconds</div>
+<div class="refresh-info">Автообновление через 5 секунд</div>
 '''
 
 
@@ -446,5 +446,5 @@ def api_panel_registers(router_sn: str, bserver_id: int):
 
 def run_web_ui(host: str = '0.0.0.0', port: int = 8080, debug: bool = False):
     """Run the web UI server."""
-    logger.info(f"Starting Web UI on http://{host}:{port}")
+    logger.info(f"Web UI запущен на http://{host}:{port}")
     app.run(host=host, port=port, debug=debug, use_reloader=False, threaded=True)

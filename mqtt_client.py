@@ -1,8 +1,8 @@
 """
-Universal Modbus Decoder - MQTT Client
+Универсальный Modbus-декодер — MQTT-клиент
 
-Handles MQTT connection, subscription to raw telemetry,
-and publication of decoded data.
+Обрабатывает MQTT-соединение, подписку на raw-телеметрию
+и публикацию декодированных данных.
 """
 
 import json
@@ -63,19 +63,19 @@ class MqttClient:
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         """Callback when connected to broker."""
         if rc == 0:
-            logger.info(f"Connected to MQTT broker at {self.host}:{self.port}")
+            logger.info(f"MQTT подключен к {self.host}:{self.port}")
             self._connected = True
             
             # Subscribe to raw telemetry
             client.subscribe(self.raw_topic_pattern)
-            logger.info(f"Subscribed to: {self.raw_topic_pattern}")
+            logger.info(f"Подписка на: {self.raw_topic_pattern}")
         else:
-            logger.error(f"Failed to connect to MQTT broker, rc={rc}")
+            logger.error(f"Ошибка подключения к MQTT, rc={rc}")
             self._connected = False
     
     def _on_disconnect(self, client, userdata, rc, properties=None):
         """Callback when disconnected from broker."""
-        logger.warning(f"Disconnected from MQTT broker, rc={rc}")
+        logger.warning(f"MQTT отключен, rc={rc}")
         self._connected = False
     
     def _on_message(self, client, userdata, msg):
@@ -85,7 +85,7 @@ class MqttClient:
         try:
             self._process_message(msg.topic, msg.payload)
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
+            logger.error(f"Ошибка обработки сообщения: {e}")
             self.decode_errors += 1
     
     @staticmethod
@@ -159,7 +159,7 @@ class MqttClient:
         match = self._topic_regex.search(topic)
         if not match:
             if self.debug_mode:
-                logger.debug(f"Topic doesn't match pattern: {topic}")
+                logger.debug(f"Топик не соответствует шаблону: {topic}")
             return
         
         router_sn = match.group(1)
@@ -168,7 +168,7 @@ class MqttClient:
         try:
             data = json.loads(payload.decode('utf-8'))
         except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON payload: {e}")
+            logger.warning(f"Невалидный JSON: {e}")
             self.decode_errors += 1
             return
         
@@ -182,11 +182,11 @@ class MqttClient:
         normalized_list = self._normalize_raw(data)
         if not normalized_list:
             if self.debug_mode:
-                logger.debug(f"Unrecognized payload structure: {list(data.keys())}")
+                logger.debug(f"Нераспознанная структура payload: {list(data.keys())}")
             return
         
         if self.debug_mode and len(normalized_list) > 1:
-            logger.debug(f"Batch: {len(normalized_list)} packets in one message")
+            logger.debug(f"Батч: {len(normalized_list)} пакетов в одном сообщении")
         
         for normalized in normalized_list:
             self._process_pcc(router_sn, normalized)
@@ -210,7 +210,7 @@ class MqttClient:
         data_str  = normalized['data_str']
         
         if server_id is None or full_addr is None or data_str is None:
-            logger.warning(f"Missing required fields after normalization")
+            logger.warning(f"Отсутствуют обязательные поля после нормализации")
             self.decode_errors += 1
             return
         
@@ -221,7 +221,7 @@ class MqttClient:
                 if not isinstance(words, list):
                     words = [words]
             except json.JSONDecodeError:
-                logger.warning(f"Invalid data array: {data_str}")
+                logger.warning(f"Невалидный массив data: {data_str}")
                 self.decode_errors += 1
                 return
         elif isinstance(data_str, list):
@@ -238,7 +238,7 @@ class MqttClient:
         
         if not decoded_registers:
             if self.debug_mode:
-                logger.debug(f"No registers decoded for {full_addr}")
+                logger.debug(f"Нет декодированных регистров для {full_addr}")
             return
         
         self.messages_decoded += 1
@@ -276,9 +276,9 @@ class MqttClient:
             self.messages_published += 1
             
             if self.debug_mode:
-                logger.debug(f"Published decoded to {topic}: {len(decoded_registers)} registers")
+                logger.debug(f"Опубликовано в {topic}: {len(decoded_registers)} регистров")
         except Exception as e:
-            logger.error(f"Failed to publish decoded: {e}")
+            logger.error(f"Ошибка публикации: {e}")
     
     def connect(self) -> bool:
         """Connect to MQTT broker."""
@@ -302,27 +302,27 @@ class MqttClient:
             self._client.reconnect_delay_set(min_delay=1, max_delay=self.reconnect_delay)
             
             # Connect
-            logger.info(f"Connecting to MQTT broker at {self.host}:{self.port}...")
+            logger.info(f"Подключение к MQTT {self.host}:{self.port}...")
             self._client.connect(self.host, self.port, keepalive=60)
             
             return True
             
         except Exception as e:
-            logger.error(f"Failed to connect to MQTT broker: {e}")
+            logger.error(f"Не удалось подключиться к MQTT: {e}")
             return False
     
     def start(self):
         """Start the MQTT client loop (non-blocking)."""
         if self._client:
             self._client.loop_start()
-            logger.info("MQTT client loop started")
+            logger.info("MQTT-клиент запущен")
     
     def stop(self):
         """Stop the MQTT client."""
         if self._client:
             self._client.loop_stop()
             self._client.disconnect()
-            logger.info("MQTT client stopped")
+            logger.info("MQTT-клиент остановлен")
     
     def is_connected(self) -> bool:
         """Check if connected to broker."""
