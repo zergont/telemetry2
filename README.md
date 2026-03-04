@@ -28,11 +28,14 @@
 
 ## Установка на Ubuntu
 
-### 1. Клонировать репозиторий
+### 1. Установить приложение в `/opt/cg-telemetry`
 
 ```bash
-git clone https://github.com/zergont/telemetry2.git
-cd telemetry2
+sudo mkdir -p /opt
+cd /opt
+sudo git clone https://github.com/zergont/telemetry2.git cg-telemetry
+sudo chown -R $USER:$USER /opt/cg-telemetry
+cd /opt/cg-telemetry
 ```
 
 ### 2. Создать виртуальное окружение
@@ -80,22 +83,22 @@ python app.py --config /путь/к/config.yaml
 ### Создать файл сервиса
 
 ```bash
-sudo nano /etc/systemd/system/telemetry2.service
+sudo nano /etc/systemd/system/cg-telemetry.service
 ```
 
 Содержимое:
 
 ```ini
 [Unit]
-Description=Универсальный Modbus-декодер (telemetry2)
+Description=CG Telemetry Modbus Decoder
 After=network.target
 
 [Service]
 Type=simple
 User=youruser
-WorkingDirectory=/opt/telemetry2
-Environment="PATH=/opt/telemetry2/venv/bin"
-ExecStart=/opt/telemetry2/venv/bin/python app.py --config /opt/telemetry2/config.yaml
+WorkingDirectory=/opt/cg-telemetry
+Environment="PATH=/opt/cg-telemetry/venv/bin"
+ExecStart=/opt/cg-telemetry/venv/bin/python app.py --config /opt/cg-telemetry/config.yaml
 Restart=always
 RestartSec=5
 
@@ -109,27 +112,82 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable telemetry2
-sudo systemctl start telemetry2
+sudo systemctl enable cg-telemetry
+sudo systemctl start cg-telemetry
 ```
 
 ### Полезные команды
 
 ```bash
 # Статус сервиса
-sudo systemctl status telemetry2
+sudo systemctl status cg-telemetry
 
 # Логи в реальном времени
-sudo journalctl -u telemetry2 -f
+sudo journalctl -u cg-telemetry -f
 
 # Перезапустить после изменений
-sudo systemctl restart telemetry2
+sudo systemctl restart cg-telemetry
 
 # Отключить автозапуск
-sudo systemctl disable telemetry2
+sudo systemctl disable cg-telemetry
 ```
 
 После `systemctl enable` сервис будет **автоматически запускаться при каждой перезагрузке** системы.
+
+## Обновление на сервере через Git
+
+Если проект уже установлен как `systemd`-сервис:
+
+```bash
+# 1) Перейти в каталог проекта
+cd /opt/cg-telemetry
+
+# 2) Подтянуть изменения из репозитория
+git pull origin master
+
+# 3) Обновить зависимости (на случай изменений в requirements.txt)
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 4) Перезапустить сервис
+sudo systemctl restart cg-telemetry
+
+# 5) Проверить статус и логи
+sudo systemctl status cg-telemetry
+sudo journalctl -u cg-telemetry -f
+```
+
+Если у вас основная ветка называется `main`, используйте:
+
+```bash
+git pull origin main
+```
+
+## Удаление с сервера
+
+Полное удаление `cg-telemetry`:
+
+```bash
+sudo systemctl stop cg-telemetry
+sudo systemctl disable cg-telemetry
+sudo rm -f /etc/systemd/system/cg-telemetry.service
+sudo systemctl daemon-reload
+sudo systemctl reset-failed
+
+sudo rm -rf /opt/cg-telemetry
+```
+
+Удаление старого сервиса `telemetry2` (если остался):
+
+```bash
+sudo systemctl stop telemetry2 2>/dev/null || true
+sudo systemctl disable telemetry2 2>/dev/null || true
+sudo rm -f /etc/systemd/system/telemetry2.service
+sudo systemctl daemon-reload
+sudo systemctl reset-failed
+
+sudo rm -rf /opt/telemetry2
+```
 
 ## MQTT-топики
 
@@ -296,7 +354,7 @@ logging:
 ## Структура проекта
 
 ```
-telemetry2/
+cg-telemetry/
 ├── app.py              # Точка входа
 ├── version.py          # Версия приложения
 ├── decoder.py          # Логика декодирования Modbus
