@@ -1,91 +1,91 @@
 # ============================================================
-# Universal Modbus Decoder - Configuration
+# Универсальный Modbus-декодер — Конфигурация
 # ============================================================
-# Copy this file to config.yaml and adjust values as needed.
+# Скопируйте этот файл в config.yaml и измените параметры под себя.
 # ============================================================
 
 # ------------------------------------------------------------
-# MQTT Broker Settings
+# Настройки MQTT-брокера
 # ------------------------------------------------------------
 mqtt:
-  # Broker hostname or IP address
+  # Хостнейм или IP-адрес брокера
   host: "localhost"
   
-  # Broker port (typically 1883 for TCP, 8883 for TLS)
+  # Порт брокера (обычно 1883 для TCP, 8883 для TLS)
   port: 1883
   
-  # Client ID (must be unique per connection)
-  client_id: "modbus-decoder-001"
+  # Client ID (должен быть уникальным для каждого подключения)
+  client_id: "modbus-decoder"
   
-  # Authentication (leave empty if not required)
+  # Аутентификация (оставьте пустым, если не требуется)
   username: ""
   password: ""
   
-  # Reconnect settings
+  # Настройки переподключения
   reconnect_delay_sec: 5
   
-  # Topic patterns
-  # RAW telemetry subscription (+ is wildcard for router SN)
+  # Шаблоны топиков
+  # Подписка на RAW телеметрию (+ — wildcard для SN роутера)
   raw_topic_pattern: "cg/v1/telemetry/SN/+"
   
-  # Decoded data publication base
+  # Базовый топик для публикации декодированных данных
   decoded_topic_base: "cg/v1/decoded/SN"
 
 # ------------------------------------------------------------
-# Web UI Settings
+# Настройки Web UI
 # ------------------------------------------------------------
 web:
-  # Host to bind (0.0.0.0 for all interfaces)
+  # Хост для bind (0.0.0.0 — все интерфейсы)
   host: "0.0.0.0"
   
-  # Port for web interface
+  # Порт веб-интерфейса
   port: 8080
   
-  # Enable debug mode (auto-reload, verbose errors)
+  # Включить debug-режим (auto-reload, подробные ошибки)
   debug: false
 
 # ------------------------------------------------------------
-# Health Monitor Settings
+# Настройки монитора состояния
 # ------------------------------------------------------------
 health:
-  # Seconds without message before panel is marked "stale"
+  # Секунд без сообщений до статуса "stale"
   stale_threshold_sec: 10
   
-  # Seconds without message before panel is marked "offline"
+  # Секунд без сообщений до статуса "offline"
   offline_threshold_sec: 60
   
-  # Health check interval
+  # Интервал проверки состояния
   check_interval_sec: 5
 
 # ------------------------------------------------------------
-# Register Maps
+# Карты регистров
 # ------------------------------------------------------------
 maps:
-  # Path to register map file (JSONL format)
+  # Путь к файлу карты регистров (формат JSONL)
   register_map: "maps/register_map.jsonl"
   
-  # Path to enum definitions (JSON format)
+  # Путь к enum-определениям (формат JSON)
   enum_map: "maps/enum_map.json"
   
-  # Path to fault bitmap definitions (JSONL format)
+  # Путь к определениям fault bitmap (формат JSONL)
   fault_bitmap_map: "maps/fault_bitmap_map.jsonl"
 
 # ------------------------------------------------------------
-# Logging Settings
+# Настройки логирования
 # ------------------------------------------------------------
 logging:
-  # Log level: DEBUG, INFO, WARNING, ERROR
+  # Уровень логирования: DEBUG, INFO, WARNING, ERROR
   level: "INFO"
   
-  # Log to file (empty = console only)
+  # Лог в файл (пусто = только консоль)
   file: ""
   
-  # Log format
+  # Формат логов
   format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 # ------------------------------------------------------------
-# Runtime Mode
+# Режим работы
 # ------------------------------------------------------------
-# debug: verbose logging, raw input/output, decode failure reasons
-# production: minimal logging
+# debug: подробные логи, raw вход/выход, причины ошибок декодирования
+# production: минимальное логирование
 mode: "production"

@@ -38,8 +38,10 @@
     <Content Include=".gitignore" />
     <Content Include="config.example.yaml" />
     <Content Include="config.yaml" />
+    <Content Include="install.sh" />
     <Content Include="README.md" />
     <Content Include="requirements.txt" />
+    <Content Include="update.sh" />
   </ItemGroup>
   <ItemGroup>
     <Interpreter Include="env\">

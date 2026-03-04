@@ -28,6 +28,59 @@
 
 ## Установка на Ubuntu
 
+Рекомендуемый способ — установочный скрипт `install.sh`.
+
+### 1. Клонировать репозиторий
+
+```bash
+git clone https://github.com/zergont/telemetry2.git
+cd telemetry2
+```
+
+### 2. Запустить установочный скрипт
+
+```bash
+chmod +x install.sh
+sudo ./install.sh
+```
+
+Скрипт автоматически:
+- устанавливает приложение в `/opt/cg-telemetry`
+- создаёт `venv` и ставит зависимости
+- создаёт `config.yaml` из `config.example.yaml` (если отсутствует)
+- создаёт `systemd`-службу `cg-telemetry`
+- включает службу в автозапуск и запускает её (`enable --now`)
+- показывает статус службы в конце установки
+
+### 3. Проверить и отредактировать конфиг
+
+```bash
+sudo nano /opt/cg-telemetry/config.yaml
+```
+
+Основные параметры:
+
+- `mqtt.host` — адрес MQTT-брокера
+- `mqtt.port` — порт (по умолчанию: 1883)
+- `mqtt.username` и `mqtt.password` — если требуется авторизация
+- `web.port` — порт Web UI (по умолчанию: 8080)
+- `mode` — `debug` для подробного логирования
+
+### 4. Перезапустить после изменения конфига
+
+```bash
+sudo systemctl restart cg-telemetry
+```
+
+### 5. Проверка статуса службы
+
+```bash
+sudo systemctl status cg-telemetry
+sudo systemctl is-enabled cg-telemetry
+```
+
+### Ручная установка (если без скрипта)
+
 ### 1. Установить приложение в `/opt/cg-telemetry`
 
 ```bash
@@ -58,25 +111,7 @@ cp config.example.yaml config.yaml
 nano config.yaml
 ```
 
-Основные параметры:
-
-- `mqtt.host` — адрес MQTT-брокера
-- `mqtt.port` — порт (по умолчанию: 1883)
-- `mqtt.username` и `mqtt.password` — если требуется авторизация
-- `web.port` — порт Web UI (по умолчанию: 8080)
-- `mode` — `debug` для подробного логирования
-
-### 5. Запустить
-
-```bash
-python app.py
-```
-
-Или с указанием конфига:
-
-```bash
-python app.py --config /путь/к/config.yaml
-```
+### 5. Настроить службу `systemd` (ниже) и запустить
 
 ## Автозапуск при перезагрузке (systemd)
 
@@ -135,6 +170,22 @@ sudo systemctl disable cg-telemetry
 После `systemctl enable` сервис будет **автоматически запускаться при каждой перезагрузке** системы.
 
 ## Обновление на сервере через Git
+
+Рекомендуемый способ — скрипт `update.sh`.
+
+```bash
+cd /opt/cg-telemetry
+chmod +x update.sh
+sudo ./update.sh
+```
+
+Скрипт автоматически:
+- подтягивает код из текущей git-ветки (`pull --ff-only`)
+- обновляет зависимости (`pip install -r requirements.txt`)
+- перезапускает службу `cg-telemetry`
+- показывает статус службы
+
+### Ручное обновление (если без скрипта)
 
 Если проект уже установлен как `systemd`-сервис:
 
