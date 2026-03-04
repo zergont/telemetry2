@@ -31,6 +31,7 @@
     <Compile Include="mqtt_test_publisher.py" />
     <Compile Include="panel_store.py" />
     <Compile Include="test_local.py" />
+    <Compile Include="version.py" />
     <Compile Include="web_ui.py" />
   </ItemGroup>
   <ItemGroup>

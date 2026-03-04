@@ -24,10 +24,7 @@ from panel_store import init_store
 from mqtt_client import init_mqtt_client
 from health_monitor import init_health_monitor
 from web_ui import run_web_ui
-
-# Version
-__version__ = '1.0.0'
-
+from version import __version__
 
 def load_config(config_path: str) -> dict:
     """Load configuration from YAML file."""

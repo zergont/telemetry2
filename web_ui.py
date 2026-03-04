@@ -11,6 +11,7 @@ from flask import Flask, render_template_string, jsonify, abort
 
 from panel_store import get_store, PanelStatus
 from mqtt_client import get_mqtt_client
+from version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,21 @@ def wrap_content(title: str, content: str) -> str:
             margin-bottom: 5px;
         }}
         a.btn:hover {{ background: #2980b9; }}
+        button.btn {{
+            display: inline-block;
+            padding: 8px 16px;
+            background: #3498db;
+            color: white;
+            border: 0;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 5px;
+            font-size: 0.95rem;
+        }}
+        button.btn:hover {{ background: #2980b9; }}
+        button.btn-danger {{ background: #e74c3c; }}
+        button.btn-danger:hover {{ background: #c0392b; }}
         .raw-value {{ color: #888; font-size: 0.85rem; }}
     </style>
 </head>
@@ -137,6 +153,17 @@ def wrap_content(title: str, content: str) -> str:
     <script>
         // Автообновление каждые 5 секунд
         setTimeout(function() {{ location.reload(); }}, 5000);
+
+        async function clearMemory() {{
+            if (!confirm('Очистить все in-memory данные (роутеры, панели, регистры)?')) return;
+            try {{
+                const response = await fetch('/api/admin/clear-memory', {{ method: 'POST' }});
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                location.reload();
+            }} catch (e) {{
+                alert('Не удалось очистить память: ' + e);
+            }}
+        }}
     </script>
 </body>
 </html>
@@ -230,6 +257,12 @@ INDEX_TEMPLATE = '''
     {% else %}
     <p>Роутеры ещё не обнаружены. Ожидание телеметрии...</p>
     {% endif %}
+</div>
+
+<div class="card">
+    <h2>🧹 Обслуживание</h2>
+    <button class="btn btn-danger" onclick="clearMemory()">Очистить in-memory</button>
+    <p class="gps">Удаляет все роутеры/панели/регистры из памяти. Новые данные появятся после следующих MQTT-сообщений.</p>
 </div>
 
 <div class="refresh-info">Автообновление через 5 секунд</div>
@@ -442,6 +475,24 @@ def api_panel_registers(router_sn: str, bserver_id: int):
         'status': panel.status.value,
         'registers': registers
     })
+
+
+@app.route('/api/admin/clear-memory', methods=['POST'])
+def api_clear_memory():
+    """API endpoint to clear in-memory store."""
+    store = get_store()
+    cleared = store.clear()
+    logger.warning(f"Выполнена очистка in-memory: routers={cleared['routers']}, panels={cleared['panels']}")
+    return jsonify({
+        'ok': True,
+        'cleared': cleared
+    })
+
+
+@app.route('/api/version')
+def api_version():
+    """API endpoint for application version."""
+    return jsonify({'version': __version__})
 
 
 def run_web_ui(host: str = '0.0.0.0', port: int = 8080, debug: bool = False):

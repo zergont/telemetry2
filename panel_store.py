@@ -257,6 +257,17 @@ class PanelStore:
                 'offline': offline
             }
 
+    def clear(self) -> dict:
+        """Clear all in-memory panel and router data."""
+        with self._lock:
+            cleared = {
+                'routers': len(self._routers),
+                'panels': len(self._panels)
+            }
+            self._routers.clear()
+            self._panels.clear()
+            return cleared
+
 
 # Global store instance
 _store: Optional[PanelStore] = None
