@@ -30,11 +30,14 @@
 
 Рекомендуемый способ — установочный скрипт `install.sh`.
 
-### 1. Клонировать репозиторий
+### 1. Клонировать репозиторий в `/opt/cg-telemetry`
 
 ```bash
-git clone https://github.com/zergont/telemetry2.git
-cd telemetry2
+sudo mkdir -p /opt
+cd /opt
+sudo git clone https://github.com/zergont/telemetry2.git cg-telemetry
+sudo chown -R $USER:$USER /opt/cg-telemetry
+cd /opt/cg-telemetry
 ```
 
 ### 2. Запустить установочный скрипт
@@ -43,6 +46,8 @@ cd telemetry2
 chmod +x install.sh
 sudo ./install.sh
 ```
+
+> В прод-сценарии рабочий каталог приложения — `/opt/cg-telemetry`.
 
 Скрипт автоматически:
 - устанавливает приложение в `/opt/cg-telemetry`
