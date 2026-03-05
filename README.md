@@ -1,4 +1,5 @@
 # Универсальный Modbus-декодер и Web UI
+# Универсальный Modbus-декодер и Web UI
 
 Серверное приложение, которое:
 - Принимает raw Modbus-телеметрию через MQTT
@@ -30,14 +31,14 @@
 
 Рекомендуемый способ — установочный скрипт `install.sh`.
 
-### 1. Клонировать репозиторий в `/opt/cg-telemetry`
+### 1. Клонировать репозиторий в `/opt/cg-decoder`
 
 ```bash
 sudo mkdir -p /opt
 cd /opt
-sudo git clone https://github.com/zergont/telemetry2.git cg-telemetry
-sudo chown -R $USER:$USER /opt/cg-telemetry
-cd /opt/cg-telemetry
+sudo git clone https://github.com/zergont/telemetry2.git cg-decoder
+sudo chown -R $USER:$USER /opt/cg-decoder
+cd /opt/cg-decoder
 ```
 
 ### 2. Запустить установочный скрипт
@@ -47,20 +48,20 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-> В прод-сценарии рабочий каталог приложения — `/opt/cg-telemetry`.
+> В прод-сценарии рабочий каталог приложения — `/opt/cg-decoder`.
 
 Скрипт автоматически:
-- устанавливает приложение в `/opt/cg-telemetry`
+- устанавливает приложение в `/opt/cg-decoder`
 - создаёт `venv` и ставит зависимости
 - создаёт `config.yaml` из `config.example.yaml` (если отсутствует)
-- создаёт `systemd`-службу `cg-telemetry`
+- создаёт `systemd`-службу `cg-decoder`
 - включает службу в автозапуск и запускает её (`enable --now`)
 - показывает статус службы в конце установки
 
 ### 3. Проверить и отредактировать конфиг
 
 ```bash
-sudo nano /opt/cg-telemetry/config.yaml
+sudo nano /opt/cg-decoder/config.yaml
 ```
 
 Основные параметры:
@@ -74,56 +75,58 @@ sudo nano /opt/cg-telemetry/config.yaml
 ### 4. Перезапустить после изменения конфига
 
 ```bash
-sudo systemctl restart cg-telemetry
+sudo systemctl restart cg-decoder
 ```
 
 ### 5. Проверка статуса службы
 
 ```bash
-sudo systemctl status cg-telemetry
-sudo systemctl is-enabled cg-telemetry
+sudo systemctl status cg-decoder
+sudo systemctl is-enabled cg-decoder
 ```
 
 ### Ручная установка (если без скрипта)
 
-### 1. Установить приложение в `/opt/cg-telemetry`
+#### 1. Установить приложение в `/opt/cg-decoder`
 
 ```bash
 sudo mkdir -p /opt
 cd /opt
-sudo git clone https://github.com/zergont/telemetry2.git cg-telemetry
-sudo chown -R $USER:$USER /opt/cg-telemetry
-cd /opt/cg-telemetry
+sudo git clone https://github.com/zergont/telemetry2.git cg-decoder
+sudo chown -R $USER:$USER /opt/cg-decoder
+cd /opt/cg-decoder
 ```
 
-### 2. Создать виртуальное окружение
+#### 2. Создать виртуальное окружение
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Установить зависимости
+#### 3. Установить зависимости
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Настроить конфигурацию
+#### 4. Настроить конфигурацию
 
 ```bash
 cp config.example.yaml config.yaml
 nano config.yaml
 ```
 
-### 5. Настроить службу `systemd` (ниже) и запустить
+#### 5. Настроить службу `systemd` (ниже) и запустить
 
 ## Автозапуск при перезагрузке (systemd)
+
+> Этот раздел нужен для ручной установки. При запуске `install.sh` служба создаётся автоматически.
 
 ### Создать файл сервиса
 
 ```bash
-sudo nano /etc/systemd/system/cg-telemetry.service
+sudo nano /etc/systemd/system/cg-decoder.service
 ```
 
 Содержимое:
@@ -136,9 +139,9 @@ After=network.target
 [Service]
 Type=simple
 User=youruser
-WorkingDirectory=/opt/cg-telemetry
-Environment="PATH=/opt/cg-telemetry/venv/bin"
-ExecStart=/opt/cg-telemetry/venv/bin/python app.py --config /opt/cg-telemetry/config.yaml
+WorkingDirectory=/opt/cg-decoder
+Environment="PATH=/opt/cg-decoder/venv/bin"
+ExecStart=/opt/cg-decoder/venv/bin/python app.py --config /opt/cg-decoder/config.yaml
 Restart=always
 RestartSec=5
 
@@ -152,24 +155,24 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable cg-telemetry
-sudo systemctl start cg-telemetry
+sudo systemctl enable cg-decoder
+sudo systemctl start cg-decoder
 ```
 
 ### Полезные команды
 
 ```bash
 # Статус сервиса
-sudo systemctl status cg-telemetry
+sudo systemctl status cg-decoder
 
 # Логи в реальном времени
-sudo journalctl -u cg-telemetry -f
+sudo journalctl -u cg-decoder -f
 
 # Перезапустить после изменений
-sudo systemctl restart cg-telemetry
+sudo systemctl restart cg-decoder
 
 # Отключить автозапуск
-sudo systemctl disable cg-telemetry
+sudo systemctl disable cg-decoder
 ```
 
 После `systemctl enable` сервис будет **автоматически запускаться при каждой перезагрузке** системы.
@@ -179,7 +182,7 @@ sudo systemctl disable cg-telemetry
 Рекомендуемый способ — скрипт `update.sh`.
 
 ```bash
-cd /opt/cg-telemetry
+cd /opt/cg-decoder
 chmod +x update.sh
 sudo ./update.sh
 ```
@@ -187,7 +190,7 @@ sudo ./update.sh
 Скрипт автоматически:
 - подтягивает код из текущей git-ветки (`pull --ff-only`)
 - обновляет зависимости (`pip install -r requirements.txt`)
-- перезапускает службу `cg-telemetry`
+- перезапускает службу `cg-decoder`
 - показывает статус службы
 
 ### Ручное обновление (если без скрипта)
@@ -196,7 +199,7 @@ sudo ./update.sh
 
 ```bash
 # 1) Перейти в каталог проекта
-cd /opt/cg-telemetry
+cd /opt/cg-decoder
 
 # 2) Подтянуть изменения из репозитория
 git pull origin master
@@ -206,11 +209,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 4) Перезапустить сервис
-sudo systemctl restart cg-telemetry
+sudo systemctl restart cg-decoder
 
 # 5) Проверить статус и логи
-sudo systemctl status cg-telemetry
-sudo journalctl -u cg-telemetry -f
+sudo systemctl status cg-decoder
+sudo journalctl -u cg-decoder -f
 ```
 
 Если у вас основная ветка называется `main`, используйте:
@@ -221,16 +224,16 @@ git pull origin main
 
 ## Удаление с сервера
 
-Полное удаление `cg-telemetry`:
+Полное удаление `cg-decoder`:
 
 ```bash
-sudo systemctl stop cg-telemetry
-sudo systemctl disable cg-telemetry
-sudo rm -f /etc/systemd/system/cg-telemetry.service
+sudo systemctl stop cg-decoder
+sudo systemctl disable cg-decoder
+sudo rm -f /etc/systemd/system/cg-decoder.service
 sudo systemctl daemon-reload
 sudo systemctl reset-failed
 
-sudo rm -rf /opt/cg-telemetry
+sudo rm -rf /opt/cg-decoder
 ```
 
 Удаление старого сервиса `telemetry2` (если остался):
@@ -410,7 +413,7 @@ logging:
 ## Структура проекта
 
 ```
-cg-telemetry/
+cg-decoder/
 ├── app.py              # Точка входа
 ├── version.py          # Версия приложения
 ├── decoder.py          # Логика декодирования Modbus

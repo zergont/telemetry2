@@ -2,8 +2,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_NAME="cg-telemetry"
-APP_DIR="/opt/cg-telemetry"
+SERVICE_NAME="cg-decoder"
+APP_DIR="/opt/cg-decoder"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "[ОШИБКА] Запустите скрипт с sudo или от root."
