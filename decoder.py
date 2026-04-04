@@ -5,7 +5,6 @@
 Хардкод регистров запрещён.
 """
 
-import json
 import struct
 import logging
 from typing import Dict, List, Optional, Any, Tuple
@@ -125,7 +124,7 @@ class ModbusDecoder:
                 # Convert to float
                 try:
                     decoded_value = struct.unpack('>f', struct.pack('>I', raw_value))[0]
-                except:
+                except (struct.error, ValueError, OverflowError):
                     return None, raw_value, "Ошибка конвертации float"
                     
             elif data_type == 'char':

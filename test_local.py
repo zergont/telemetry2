@@ -13,7 +13,6 @@ import logging
 import threading
 import time
 import json
-import sys
 
 # Setup logging
 logging.basicConfig(

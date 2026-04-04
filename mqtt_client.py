@@ -9,7 +9,7 @@ import json
 import re
 import logging
 import threading
-from typing import Callable, Optional, Any
+from typing import Optional
 
 import paho.mqtt.client as mqtt
 
@@ -80,13 +80,15 @@ class MqttClient:
     
     def _on_message(self, client, userdata, msg):
         """Callback when message received."""
-        self.messages_received += 1
-        
+        with self._lock:
+            self.messages_received += 1
+
         try:
             self._process_message(msg.topic, msg.payload)
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
-            self.decode_errors += 1
+            with self._lock:
+                self.decode_errors += 1
     
     @staticmethod
     def _normalize_one(inner: dict) -> Optional[dict]:
@@ -241,7 +243,8 @@ class MqttClient:
                 logger.debug(f"Нет декодированных регистров для {full_addr}")
             return
         
-        self.messages_decoded += 1
+        with self._lock:
+            self.messages_decoded += 1
         
         # Update store (GPS is handled separately)
         store = get_store()
@@ -273,7 +276,8 @@ class MqttClient:
         
         try:
             self._client.publish(topic, json.dumps(payload))
-            self.messages_published += 1
+            with self._lock:
+                self.messages_published += 1
             
             if self.debug_mode:
                 logger.debug(f"Опубликовано в {topic}: {len(decoded_registers)} регистров")
@@ -330,13 +334,14 @@ class MqttClient:
     
     def get_stats(self) -> dict:
         """Get client statistics."""
-        return {
-            'connected': self._connected,
-            'messages_received': self.messages_received,
-            'messages_decoded': self.messages_decoded,
-            'messages_published': self.messages_published,
-            'decode_errors': self.decode_errors
-        }
+        with self._lock:
+            return {
+                'connected': self._connected,
+                'messages_received': self.messages_received,
+                'messages_decoded': self.messages_decoded,
+                'messages_published': self.messages_published,
+                'decode_errors': self.decode_errors
+            }
 
 
 # Global client instance

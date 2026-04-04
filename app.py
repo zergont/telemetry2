@@ -62,9 +62,10 @@ def setup_logging(config: dict):
         handlers=handlers
     )
     
-    # Reduce noise from libraries
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
-    logging.getLogger('apscheduler').setLevel(logging.WARNING)
+    # Reduce noise from libraries (in debug mode, keep their default levels)
+    if level > logging.DEBUG:
+        logging.getLogger('werkzeug').setLevel(logging.WARNING)
+        logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
 
 def print_status(ok: bool, message: str):
