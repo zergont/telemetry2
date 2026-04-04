@@ -144,7 +144,7 @@ def wrap_content(title: str, content: str) -> str:
 <body>
     <header>
         <div class="container">
-            <h1>🔌 Универсальный Modbus-декодер</h1>
+            <h1>🔌 Универсальный Modbus-декодер <span style="font-size:0.7rem;opacity:0.6">v{__version__}</span></h1>
         </div>
     </header>
     <div class="container">
@@ -155,7 +155,7 @@ def wrap_content(title: str, content: str) -> str:
         // Нет мерцания, скролл сохраняется, CSS/JS не перепарсиваются
         setInterval(async function() {{
             try {{
-                const resp = await fetch(location.href);
+                const resp = await fetch(location.href, {{ cache: 'no-store' }});
                 if (!resp.ok) return;
                 const html = await resp.text();
                 const parser = new DOMParser();
