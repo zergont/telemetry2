@@ -168,10 +168,10 @@ def main():
     
     mqtt_connected = mqtt_client.connect()
     print_status(mqtt_connected, "MQTT подключен" if mqtt_connected else "MQTT не подключен (будет повторять)")
-    
-    if mqtt_connected:
-        mqtt_client.start()
-        print_status(True, "декодер запущен")
+
+    # Всегда запускаем loop — paho сам переподключится, если брокер недоступен при старте
+    mqtt_client.start()
+    print_status(True, "декодер запущен")
     
     # ================================================================
     # Start Web UI

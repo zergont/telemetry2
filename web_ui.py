@@ -151,8 +151,21 @@ def wrap_content(title: str, content: str) -> str:
         {content}
     </div>
     <script>
-        // Автообновление каждые 5 секунд
-        setTimeout(function() {{ location.reload(); }}, 5000);
+        // AJAX-обновление: заменяем только содержимое .container, без перезагрузки страницы
+        // Нет мерцания, скролл сохраняется, CSS/JS не перепарсиваются
+        setInterval(async function() {{
+            try {{
+                const resp = await fetch(location.href);
+                if (!resp.ok) return;
+                const html = await resp.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const fresh = doc.querySelector('.container');
+                if (fresh) {{
+                    document.querySelector('.container').innerHTML = fresh.innerHTML;
+                }}
+            }} catch (e) {{ /* сеть недоступна — пропускаем */ }}
+        }}, 5000);
 
         async function clearMemory() {{
             if (!confirm('Очистить все in-memory данные (роутеры, панели, регистры)?')) return;
@@ -265,7 +278,7 @@ INDEX_TEMPLATE = '''
     <p class="gps">Удаляет все роутеры/панели/регистры из памяти. Новые данные появятся после следующих MQTT-сообщений.</p>
 </div>
 
-<div class="refresh-info">Автообновление через 5 секунд</div>
+<div class="refresh-info">Автообновление каждые 5 секунд</div>
 '''
 
 PANEL_TEMPLATE = '''
@@ -345,7 +358,7 @@ PANEL_TEMPLATE = '''
     {% endif %}
 </div>
 
-<div class="refresh-info">Автообновление через 5 секунд</div>
+<div class="refresh-info">Автообновление каждые 5 секунд</div>
 '''
 
 

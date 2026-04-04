@@ -285,34 +285,40 @@ class MqttClient:
             logger.error(f"Ошибка публикации: {e}")
     
     def connect(self) -> bool:
-        """Connect to MQTT broker."""
+        """
+        Connect to MQTT broker.
+
+        Uses connect_async so that loop_start() can handle reconnection
+        even if the broker is unavailable at startup.
+        Returns True if connection was initiated, False on setup error.
+        """
         try:
             # Create client with MQTTv5
             self._client = mqtt.Client(
                 client_id=self.client_id,
                 protocol=mqtt.MQTTv5
             )
-            
+
             # Set callbacks
             self._client.on_connect = self._on_connect
             self._client.on_disconnect = self._on_disconnect
             self._client.on_message = self._on_message
-            
+
             # Set credentials if provided
             if self.username:
                 self._client.username_pw_set(self.username, self.password)
-            
+
             # Enable auto-reconnect
             self._client.reconnect_delay_set(min_delay=1, max_delay=self.reconnect_delay)
-            
-            # Connect
+
+            # Async connect — не блокирует, пусть loop_start() занимается подключением
             logger.info(f"Подключение к MQTT {self.host}:{self.port}...")
-            self._client.connect(self.host, self.port, keepalive=60)
-            
+            self._client.connect_async(self.host, self.port, keepalive=60)
+
             return True
-            
+
         except Exception as e:
-            logger.error(f"Не удалось подключиться к MQTT: {e}")
+            logger.error(f"Не удалось инициализировать MQTT-клиент: {e}")
             return False
     
     def start(self):
