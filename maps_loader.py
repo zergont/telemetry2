@@ -246,18 +246,22 @@ def _load_ignore_list(device_type: str, maps_dir: str):
             _ignore_lists[device_type] = {}
 
 
-def _save_ignore_list(device_type: str):
-    """Save ignore_registers.json for a device type. Must be called under _ignore_lock."""
+def _save_ignore_list(device_type: str) -> str:
+    """Save ignore_registers.json for a device type. Must be called under _ignore_lock.
+    Returns empty string on success, error message on failure."""
     maps_dir = _device_dirs.get(device_type)
     if not maps_dir:
-        return
+        return f"maps_dir не найден для '{device_type}'"
     path = Path(maps_dir) / 'ignore_registers.json'
     try:
         data = _ignore_lists.get(device_type, {})
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        return ""
     except OSError as e:
-        logger.error(f"Ошибка сохранения ignore_registers.json для '{device_type}': {e}")
+        err = f"Не удалось сохранить ignore-list: {e}"
+        logger.error(err)
+        return err
 
 
 def is_ignored(device_type: str, reg_type: str, addr: int) -> bool:
@@ -267,18 +271,21 @@ def is_ignored(device_type: str, reg_type: str, addr: int) -> bool:
         return key in _ignore_lists.get(device_type, {})
 
 
-def add_to_ignore(device_type: str, reg_type: str, addr: int, comment: str = "") -> bool:
-    """Add a register to the ignore list. Returns True on success."""
+def add_to_ignore(device_type: str, reg_type: str, addr: int, comment: str = "") -> tuple:
+    """Add a register to the ignore list.
+    Returns (True, '') on success, (False, error_message) on failure."""
     if device_type not in _loaders:
-        return False
+        return False, f"Устройство '{device_type}' не найдено"
     key = f"{reg_type}:{addr}"
     with _ignore_lock:
         if device_type not in _ignore_lists:
             _ignore_lists[device_type] = {}
-        _ignore_lists[device_type][key] = comment or f"Игнорируется с UI"
-        _save_ignore_list(device_type)
+        _ignore_lists[device_type][key] = comment or "Игнорируется с UI"
+        save_err = _save_ignore_list(device_type)
+    if save_err:
+        return False, save_err
     logger.info(f"Регистр {key} добавлен в ignore-list '{device_type}': {comment}")
-    return True
+    return True, ""
 
 
 def remove_from_ignore(device_type: str, reg_type: str, addr: int) -> bool:

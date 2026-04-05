@@ -1135,10 +1135,10 @@ def api_add_ignore():
     if not device_type or addr is None:
         return jsonify({'ok': False, 'error': 'device_type и addr обязательны'}), 400
 
-    ok = add_to_ignore(device_type, 'holding', int(addr), comment)
+    ok, err = add_to_ignore(device_type, 'holding', int(addr), comment)
     if ok:
         return jsonify({'ok': True})
-    return jsonify({'ok': False, 'error': f"Устройство '{device_type}' не найдено"}), 404
+    return jsonify({'ok': False, 'error': err}), 400
 
 
 @app.route('/api/ignore', methods=['DELETE'])
