@@ -242,7 +242,7 @@ INDEX_TEMPLATE = '''
                 <td>
                     {% for panel in router.panels %}
                         <a href="/router/{{ router.sn }}/panel/{{ panel.bserver_id }}" class="btn">
-                            Панель {{ panel.bserver_id }}
+                            {{ panel.device_type|upper }} #{{ panel.bserver_id }}
                             <span class="status status-{{ panel.status.value }}">{{ panel.status.value }}</span>
                         </a>
                     {% endfor %}
@@ -271,8 +271,8 @@ INDEX_TEMPLATE = '''
 PANEL_TEMPLATE = '''
 <div class="card">
     <h2>
-        <a href="/">← Назад</a> | 
-        Роутер: {{ router_sn }} | Панель: {{ bserver_id }}
+        <a href="/">← Назад</a> |
+        Роутер: {{ router_sn }} | {{ panel.device_type|upper }} #{{ bserver_id }}
         <span class="status status-{{ panel.status.value }}">{{ panel.status.value }}</span>
     </h2>
     
@@ -448,6 +448,7 @@ def api_routers():
             'panels': [
                 {
                     'bserver_id': p.bserver_id,
+                    'device_type': p.device_type,
                     'status': p.status.value,
                     'message_count': p.message_count
                 }
@@ -472,6 +473,7 @@ def api_panel_registers(router_sn: str, bserver_id: int):
     return jsonify({
         'router_sn': router_sn,
         'bserver_id': bserver_id,
+        'device_type': panel.device_type,
         'status': panel.status.value,
         'registers': registers
     })

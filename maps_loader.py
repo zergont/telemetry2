@@ -2,6 +2,7 @@
 Универсальный Modbus-декодер — Загрузчик карт регистров
 
 Загружает карты регистров, enum и fault bitmap из внешних файлов.
+Поддерживает несколько типов устройств, каждый со своим набором карт.
 Хардкод регистров запрещён — все данные из файлов.
 """
 
@@ -17,8 +18,9 @@ class RegisterMapLoader:
     """
     Loads register definitions from external JSONL/JSON files.
     Provides lookup methods for decoding.
+    One instance per device type.
     """
-    
+
     def __init__(self):
         # register_map: key = (reg_type, addr) -> register definition dict
         self._register_map: Dict[Tuple[str, int], dict] = {}
@@ -31,7 +33,7 @@ class RegisterMapLoader:
 
         # All fault addresses (for quick lookup)
         self._fault_addresses: set = set()
-    
+
     def load_register_map(self, filepath: str) -> int:
         """
         Load register definitions from JSONL file.
@@ -41,7 +43,7 @@ class RegisterMapLoader:
         if not path.exists():
             logger.error(f"Файл карты регистров не найден: {filepath}")
             return 0
-        
+
         count = 0
         with open(path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
@@ -57,10 +59,10 @@ class RegisterMapLoader:
                         count += 1
                 except json.JSONDecodeError as e:
                     logger.warning(f"Невалидный JSON в строке {line_num} файла {filepath}: {e}")
-        
+
         logger.info(f"Загружено {count} определений регистров из {filepath}")
         return count
-    
+
     def load_enum_map(self, filepath: str) -> int:
         """
         Load enum definitions from JSON file.
@@ -70,7 +72,7 @@ class RegisterMapLoader:
         if not path.exists():
             logger.error(f"Файл enum не найден: {filepath}")
             return 0
-        
+
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 raw = json.load(f)
@@ -85,7 +87,7 @@ class RegisterMapLoader:
         except json.JSONDecodeError as e:
             logger.error(f"Невалидный JSON в {filepath}: {e}")
             return 0
-    
+
     def load_fault_bitmap_map(self, filepath: str) -> int:
         """
         Load fault bitmap definitions from JSONL file.
@@ -95,7 +97,7 @@ class RegisterMapLoader:
         if not path.exists():
             logger.error(f"Файл fault bitmap не найден: {filepath}")
             return 0
-        
+
         count = 0
         with open(path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
@@ -113,10 +115,10 @@ class RegisterMapLoader:
                         count += 1
                 except json.JSONDecodeError as e:
                     logger.warning(f"Невалидный JSON в строке {line_num} файла {filepath}: {e}")
-        
+
         logger.info(f"Загружено {count} определений fault bitmap из {filepath}")
         return count
-    
+
     def get_register(self, reg_type: str, addr: int) -> Optional[dict]:
         """Get register definition by type and address."""
         return self._register_map.get((reg_type, addr))
@@ -141,30 +143,68 @@ class RegisterMapLoader:
         return self._register_map.copy()
 
 
-# Global instance
-_loader: Optional[RegisterMapLoader] = None
+# ================================================================
+# Global registry: device_type -> RegisterMapLoader
+# ================================================================
+_loaders: Dict[str, RegisterMapLoader] = {}
 
 
-def get_loader() -> RegisterMapLoader:
-    """Get the global RegisterMapLoader instance."""
-    global _loader
-    if _loader is None:
-        _loader = RegisterMapLoader()
-    return _loader
+def get_loader(device_type: str = 'pcc') -> Optional[RegisterMapLoader]:
+    """Get the RegisterMapLoader for a specific device type."""
+    return _loaders.get(device_type)
 
 
+def load_device_maps(device_type: str, maps_dir: str) -> bool:
+    """
+    Load all map files for a device type from a directory.
+
+    Expected files in maps_dir:
+        register_map.jsonl
+        enum_map.json
+        fault_bitmap_map.jsonl
+
+    Returns True if register map loaded successfully.
+    """
+    global _loaders
+
+    loader = RegisterMapLoader()
+    base = Path(maps_dir)
+
+    reg_count = loader.load_register_map(str(base / 'register_map.jsonl'))
+    loader.load_enum_map(str(base / 'enum_map.json'))
+    loader.load_fault_bitmap_map(str(base / 'fault_bitmap_map.jsonl'))
+
+    if reg_count == 0:
+        logger.error(f"Ни один регистр не загружен для устройства '{device_type}' из {maps_dir}")
+        return False
+
+    _loaders[device_type] = loader
+    logger.info(f"Карты для устройства '{device_type}' загружены из {maps_dir}")
+    return True
+
+
+def get_registered_device_types() -> list:
+    """Get list of all registered device types."""
+    return list(_loaders.keys())
+
+
+# Backward compatibility
 def load_all_maps(register_map_path: str, enum_map_path: str, fault_bitmap_path: str) -> bool:
     """
-    Load all map files. Returns True if all loaded successfully.
+    Load all map files (legacy single-device mode).
+    Creates a 'pcc' device type from individual file paths.
     """
-    loader = get_loader()
-    
+    global _loaders
+
+    loader = RegisterMapLoader()
+
     reg_count = loader.load_register_map(register_map_path)
-    enum_count = loader.load_enum_map(enum_map_path)
-    fault_count = loader.load_fault_bitmap_map(fault_bitmap_path)
-    
+    loader.load_enum_map(enum_map_path)
+    loader.load_fault_bitmap_map(fault_bitmap_path)
+
     if reg_count == 0:
         logger.error("Ни один регистр не загружен — декодер не будет работать")
         return False
-    
+
+    _loaders['pcc'] = loader
     return True

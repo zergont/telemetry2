@@ -3,13 +3,14 @@
 
 Обрабатывает MQTT-соединение, подписку на raw-телеметрию
 и публикацию декодированных данных.
+Поддерживает несколько типов устройств через маппинг payload_key → device_type.
 """
 
 import json
 import re
 import logging
 import threading
-from typing import Optional
+from typing import Dict, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -23,8 +24,8 @@ class MqttClient:
     """
     MQTT client for receiving raw Modbus data and publishing decoded data.
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  host: str,
                  port: int = 1883,
                  client_id: str = "modbus-decoder",
@@ -33,8 +34,9 @@ class MqttClient:
                  reconnect_delay: int = 5,
                  raw_topic_pattern: str = "cg/v1/telemetry/SN/+",
                  decoded_topic_base: str = "cg/v1/decoded/SN",
+                 payload_key_map: Optional[Dict[str, str]] = None,
                  debug_mode: bool = False):
-        
+
         self.host = host
         self.port = port
         self.client_id = client_id
@@ -44,40 +46,44 @@ class MqttClient:
         self.raw_topic_pattern = raw_topic_pattern
         self.decoded_topic_base = decoded_topic_base
         self.debug_mode = debug_mode
-        
+
+        # payload_key -> device_type mapping
+        # e.g. {"PCC_3_3": "pcc", "Modbus_PCC": "pcc", "DSE_8610": "dse"}
+        self._payload_key_map: Dict[str, str] = payload_key_map or {}
+
         # MQTT client
         self._client: Optional[mqtt.Client] = None
         self._connected = False
         self._lock = threading.Lock()
-        
+
         # Regex to extract router SN from topic
         # cg/v1/telemetry/SN/<router_sn>
         self._topic_regex = re.compile(r'cg/v1/telemetry/SN/([^/]+)')
-        
+
         # Stats
         self.messages_received = 0
         self.messages_decoded = 0
         self.messages_published = 0
         self.decode_errors = 0
-    
+
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         """Callback when connected to broker."""
         if rc == 0:
             logger.info(f"MQTT подключен к {self.host}:{self.port}")
             self._connected = True
-            
+
             # Subscribe to raw telemetry
             client.subscribe(self.raw_topic_pattern)
             logger.info(f"Подписка на: {self.raw_topic_pattern}")
         else:
             logger.error(f"Ошибка подключения к MQTT, rc={rc}")
             self._connected = False
-    
+
     def _on_disconnect(self, client, userdata, rc, properties=None):
         """Callback when disconnected from broker."""
         logger.warning(f"MQTT отключен, rc={rc}")
         self._connected = False
-    
+
     def _on_message(self, client, userdata, msg):
         """Callback when message received."""
         with self._lock:
@@ -89,7 +95,15 @@ class MqttClient:
             logger.error(f"Ошибка обработки сообщения: {e}")
             with self._lock:
                 self.decode_errors += 1
-    
+
+    def _resolve_device_type(self, payload_key: str) -> Optional[str]:
+        """
+        Resolve device_type from payload key using configured mapping.
+
+        Returns device_type string or None if key is not mapped.
+        """
+        return self._payload_key_map.get(payload_key)
+
     @staticmethod
     def _normalize_one(inner: dict) -> Optional[dict]:
         """
@@ -104,7 +118,7 @@ class MqttClient:
                 'full_addr': inner.get('full_addr'),
                 'data_str':  inner.get('data'),
             }
-        
+
         # Shape B: has addr (int offset) + data — PCC_3_3 / input2 etc.
         if 'addr' in inner and 'data' in inner:
             raw_addr = inner['addr']
@@ -115,46 +129,55 @@ class MqttClient:
                 'full_addr': full_addr,
                 'data_str':  inner.get('data'),
             }
-        
+
         return None
-    
-    @staticmethod
-    def _normalize_raw(data: dict) -> list:
+
+    def _normalize_raw(self, data: dict) -> list:
         """
         Raw Normalizer.
-        
+
         Accepts any known payload shape and returns a LIST of unified dicts.
+        Each dict includes 'device_type' resolved from the payload key.
+
         Handles both single-object and batched-array payloads:
-        
           {"PCC_3_3": {"addr": ..., "data": ...}}            → [one record]
           {"PCC_3_3": [{...}, {...}, {...}]}                  → [N records]
           {"Modbus_PCC": {"full_addr": ..., "data": ...}}     → [one record]
-        
+
         Returns empty list if nothing recognized.
         """
         results = []
-        
+
         for key, value in data.items():
-            # Skip non-Modbus keys (e.g. GPS)
+            # Skip non-Modbus keys (e.g. GPS) and non-dict/list values
             if not isinstance(value, (dict, list)):
                 continue
-            
+
+            # Resolve device type from payload key
+            device_type = self._resolve_device_type(key)
+            if device_type is None:
+                if self.debug_mode:
+                    logger.debug(f"Неизвестный ключ payload '{key}', пропускаем")
+                continue
+
             # Single object
             if isinstance(value, dict):
                 normalized = MqttClient._normalize_one(value)
                 if normalized:
+                    normalized['device_type'] = device_type
                     results.append(normalized)
-            
+
             # Batched array of objects
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, dict):
                         normalized = MqttClient._normalize_one(item)
                         if normalized:
+                            normalized['device_type'] = device_type
                             results.append(normalized)
-        
+
         return results
-    
+
     def _process_message(self, topic: str, payload: bytes):
         """Process a raw telemetry message."""
         # Extract router SN from topic
@@ -163,59 +186,62 @@ class MqttClient:
             if self.debug_mode:
                 logger.debug(f"Топик не соответствует шаблону: {topic}")
             return
-        
+
         router_sn = match.group(1)
-        
+
         # Parse JSON payload
         try:
             data = json.loads(payload.decode('utf-8'))
         except json.JSONDecodeError as e:
             logger.warning(f"Невалидный JSON: {e}")
-            self.decode_errors += 1
+            with self._lock:
+                self.decode_errors += 1
             return
-        
+
         # --- GPS message ---
         gps_data = data.get('GPS')
         if gps_data and isinstance(gps_data, dict):
             self._process_gps(router_sn, gps_data)
             return
-        
-        # --- Modbus PCC message (single or batched) ---
+
+        # --- Modbus message (single or batched) ---
         normalized_list = self._normalize_raw(data)
         if not normalized_list:
             if self.debug_mode:
                 logger.debug(f"Нераспознанная структура payload: {list(data.keys())}")
             return
-        
+
         if self.debug_mode and len(normalized_list) > 1:
             logger.debug(f"Батч: {len(normalized_list)} пакетов в одном сообщении")
-        
+
         for normalized in normalized_list:
-            self._process_pcc(router_sn, normalized)
-    
+            self._process_modbus(router_sn, normalized)
+
     def _process_gps(self, router_sn: str, gps_data: dict):
         """Process a GPS message and update router state."""
         store = get_store()
         store.update_router_gps(router_sn, gps_data)
-        
+
         if self.debug_mode:
             logger.debug(f"GPS: router={router_sn}, "
                          f"lat={gps_data.get('latitude')}, "
                          f"lon={gps_data.get('longitude')}, "
                          f"sat={gps_data.get('satellites')}")
-    
-    def _process_pcc(self, router_sn: str, normalized: dict):
-        """Process a normalized Modbus PCC message."""
-        date_iso  = normalized['date_iso']
-        server_id = normalized['server_id']
-        full_addr = normalized['full_addr']
-        data_str  = normalized['data_str']
-        
+
+    def _process_modbus(self, router_sn: str, normalized: dict):
+        """Process a normalized Modbus message."""
+        date_iso    = normalized['date_iso']
+        server_id   = normalized['server_id']
+        full_addr   = normalized['full_addr']
+        data_str    = normalized['data_str']
+        device_type = normalized['device_type']
+
         if server_id is None or full_addr is None or data_str is None:
             logger.warning(f"Отсутствуют обязательные поля после нормализации")
-            self.decode_errors += 1
+            with self._lock:
+                self.decode_errors += 1
             return
-        
+
         # Parse data array (may be a JSON string or already a list)
         if isinstance(data_str, str):
             try:
@@ -224,66 +250,70 @@ class MqttClient:
                     words = [words]
             except json.JSONDecodeError:
                 logger.warning(f"Невалидный массив data: {data_str}")
-                self.decode_errors += 1
+                with self._lock:
+                    self.decode_errors += 1
                 return
         elif isinstance(data_str, list):
             words = data_str
         else:
             words = [data_str]
-        
+
         if self.debug_mode:
-            logger.debug(f"RAW: router={router_sn}, server={server_id}, addr={full_addr}, data={words}")
-        
-        # Decode
+            logger.debug(f"RAW: router={router_sn}, server={server_id}, "
+                         f"device={device_type}, addr={full_addr}, data={words}")
+
+        # Decode using the correct map set for this device type
         decoder = get_decoder(debug_mode=self.debug_mode)
-        decoded_registers = decoder.decode_packet(str(full_addr), words)
-        
+        decoded_registers = decoder.decode_packet(str(full_addr), words, device_type=device_type)
+
         if not decoded_registers:
             if self.debug_mode:
                 logger.debug(f"Нет декодированных регистров для {full_addr}")
             return
-        
+
         with self._lock:
             self.messages_decoded += 1
-        
-        # Update store (GPS is handled separately)
+
+        # Update store
         store = get_store()
         store.update_panel(
             router_sn=router_sn,
             bserver_id=server_id,
+            device_type=device_type,
             decoded_registers=decoded_registers
         )
-        
+
         # Publish decoded data
-        self._publish_decoded(router_sn, server_id, decoded_registers, date_iso)
-    
-    def _publish_decoded(self, router_sn: str, bserver_id: int, 
+        self._publish_decoded(router_sn, server_id, device_type, decoded_registers, date_iso)
+
+    def _publish_decoded(self, router_sn: str, bserver_id: int, device_type: str,
                          decoded_registers: list, timestamp: Optional[str]):
         """Publish decoded data to MQTT."""
         if not self._connected or not self._client:
             return
-        
-        # Build decoded topic: cg/v1/decoded/SN/<router_sn>/pcc/<bserver_id>
-        topic = f"{self.decoded_topic_base}/{router_sn}/pcc/{bserver_id}"
-        
+
+        # Build decoded topic: cg/v1/decoded/SN/<router_sn>/<device_type>/<bserver_id>
+        topic = f"{self.decoded_topic_base}/{router_sn}/{device_type}/{bserver_id}"
+
         # Build payload
         payload = {
             'timestamp': timestamp,
             'router_sn': router_sn,
             'bserver_id': bserver_id,
+            'device_type': device_type,
             'registers': decoded_registers
         }
-        
+
         try:
             self._client.publish(topic, json.dumps(payload))
             with self._lock:
                 self.messages_published += 1
-            
+
             if self.debug_mode:
                 logger.debug(f"Опубликовано в {topic}: {len(decoded_registers)} регистров")
         except Exception as e:
             logger.error(f"Ошибка публикации: {e}")
-    
+
     def connect(self) -> bool:
         """
         Connect to MQTT broker.
@@ -320,24 +350,24 @@ class MqttClient:
         except Exception as e:
             logger.error(f"Не удалось инициализировать MQTT-клиент: {e}")
             return False
-    
+
     def start(self):
         """Start the MQTT client loop (non-blocking)."""
         if self._client:
             self._client.loop_start()
             logger.info("MQTT-клиент запущен")
-    
+
     def stop(self):
         """Stop the MQTT client."""
         if self._client:
             self._client.loop_stop()
             self._client.disconnect()
             logger.info("MQTT-клиент остановлен")
-    
+
     def is_connected(self) -> bool:
         """Check if connected to broker."""
         return self._connected
-    
+
     def get_stats(self) -> dict:
         """Get client statistics."""
         with self._lock:

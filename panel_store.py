@@ -27,16 +27,19 @@ class PanelState:
     """State of a single Modbus panel."""
     router_sn: str
     bserver_id: int
-    
+
+    # Device type (e.g. 'pcc', 'dse')
+    device_type: str = 'pcc'
+
     # Last message timestamp
     last_seen: float = 0.0
-    
+
     # Last decoded registers: addr -> decoded dict
     registers: Dict[int, dict] = field(default_factory=dict)
-    
+
     # Current status
     status: PanelStatus = PanelStatus.OFFLINE
-    
+
     # Message counters
     message_count: int = 0
     decode_error_count: int = 0
@@ -88,16 +91,17 @@ class PanelStore:
         """Generate panel key from router SN and bserver ID."""
         return f"{router_sn}:{bserver_id}"
     
-    def get_or_create_panel(self, router_sn: str, bserver_id: int) -> PanelState:
+    def get_or_create_panel(self, router_sn: str, bserver_id: int, device_type: str = 'pcc') -> PanelState:
         """Get existing panel or create new one (dynamic discovery)."""
         key = self._panel_key(router_sn, bserver_id)
-        
+
         with self._lock:
             if key not in self._panels:
-                logger.info(f"Обнаружена новая панель: роутер={router_sn}, панель={bserver_id}")
+                logger.info(f"Обнаружена новая панель: роутер={router_sn}, панель={bserver_id}, тип={device_type}")
                 self._panels[key] = PanelState(
                     router_sn=router_sn,
-                    bserver_id=bserver_id
+                    bserver_id=bserver_id,
+                    device_type=device_type
                 )
                 
                 # Also update router
@@ -114,12 +118,12 @@ class PanelStore:
         return self._routers[router_sn]
     
     def update_panel(self, router_sn: str, bserver_id: int,
-                     decoded_registers: List[dict]) -> None:
+                     decoded_registers: List[dict], device_type: str = 'pcc') -> None:
         """
         Update panel state with new decoded data.
         GPS is updated separately via update_router_gps.
         """
-        panel = self.get_or_create_panel(router_sn, bserver_id)
+        panel = self.get_or_create_panel(router_sn, bserver_id, device_type=device_type)
         
         with self._lock:
             now = time.time()
