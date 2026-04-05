@@ -9,6 +9,7 @@
 import json
 import re
 import logging
+import time
 import threading
 from typing import Dict, Optional
 
@@ -66,6 +67,9 @@ class MqttClient:
         self.messages_published = 0
         self.decode_errors = 0
 
+        # Auto-discovery: unknown payload keys -> {key: {count, first_seen, last_seen}}
+        self._unknown_keys: Dict[str, dict] = {}
+
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         """Callback when connected to broker."""
         if rc == 0:
@@ -103,6 +107,35 @@ class MqttClient:
         Returns device_type string or None if key is not mapped.
         """
         return self._payload_key_map.get(payload_key)
+
+    def _track_unknown_key(self, key: str):
+        """Track an unknown payload key for auto-discovery."""
+        now = time.time()
+        with self._lock:
+            if key in self._unknown_keys:
+                self._unknown_keys[key]['count'] += 1
+                self._unknown_keys[key]['last_seen'] = now
+            else:
+                self._unknown_keys[key] = {
+                    'count': 1,
+                    'first_seen': now,
+                    'last_seen': now
+                }
+                logger.info(f"Обнаружен неизвестный ключ payload: '{key}' — добавьте в config devices")
+
+    def get_unknown_keys(self) -> Dict[str, dict]:
+        """Get discovered unknown payload keys."""
+        with self._lock:
+            return dict(self._unknown_keys)
+
+    def update_payload_key_map(self, new_map: Dict[str, str]):
+        """Hot-update payload key mapping. Clears matched keys from unknown."""
+        with self._lock:
+            self._payload_key_map.update(new_map)
+            # Remove keys that are now mapped
+            for key in list(self._unknown_keys):
+                if key in self._payload_key_map:
+                    del self._unknown_keys[key]
 
     @staticmethod
     def _normalize_one(inner: dict) -> Optional[dict]:
@@ -148,8 +181,7 @@ class MqttClient:
             # Resolve device type from payload key
             device_type = self._resolve_device_type(key)
             if device_type is None:
-                if self.debug_mode:
-                    logger.debug(f"Неизвестный ключ payload '{key}', пропускаем")
+                self._track_unknown_key(key)
                 continue
 
             # Single object
@@ -266,8 +298,20 @@ class MqttClient:
         with self._lock:
             self.messages_decoded += 1
 
-        # Update store
+        # Track decode errors with context
         store = get_store()
+        for reg in decoded_registers:
+            if reg.get('reason'):
+                store.record_decode_error_detail(
+                    router_sn=router_sn,
+                    bserver_id=server_id,
+                    device_type=device_type,
+                    addr=str(reg.get('addr', '?')),
+                    reason=reg['reason'],
+                    raw_data=reg.get('raw')
+                )
+
+        # Update store
         store.update_panel(
             router_sn=router_sn,
             bserver_id=server_id,

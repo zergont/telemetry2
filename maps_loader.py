@@ -186,3 +186,25 @@ def load_device_maps(device_type: str, maps_dir: str) -> bool:
 def get_registered_device_types() -> list:
     """Get list of all registered device types."""
     return list(_loaders.keys())
+
+
+def remove_device(device_type: str) -> bool:
+    """Remove a device type from the registry."""
+    global _loaders
+    if device_type in _loaders:
+        del _loaders[device_type]
+        logger.info(f"Устройство '{device_type}' удалено из реестра")
+        return True
+    return False
+
+
+def get_device_stats(device_type: str) -> Optional[dict]:
+    """Get stats for a loaded device type."""
+    loader = _loaders.get(device_type)
+    if not loader:
+        return None
+    return {
+        'register_count': len(loader._register_map),
+        'enum_count': len(loader._enum_map),
+        'fault_count': len(loader._fault_bitmap_map),
+    }

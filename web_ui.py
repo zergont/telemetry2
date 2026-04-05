@@ -5,12 +5,17 @@
 UI не знает ничего о Modbus — только отображает декодированные данные.
 """
 
+import os
 import logging
+import time
+from pathlib import Path
 from typing import Optional
-from flask import Flask, render_template_string, jsonify, abort
+from flask import Flask, render_template_string, jsonify, abort, request
 
 from panel_store import get_store, PanelStatus
 from mqtt_client import get_mqtt_client
+from maps_loader import get_registered_device_types, get_device_stats, load_device_maps, remove_device
+from map_validator import validate_device_maps
 from version import __version__
 
 logger = logging.getLogger(__name__)
@@ -144,7 +149,11 @@ def wrap_content(title: str, content: str) -> str:
 <body>
     <header>
         <div class="container">
-            <h1>🔌 Универсальный Modbus-декодер <span style="font-size:0.7rem;opacity:0.6">v{__version__}</span></h1>
+            <h1>
+                <a href="/" style="color:white;text-decoration:none">🔌 Modbus-декодер</a>
+                <a href="/devices" style="font-size:0.85rem;margin-left:20px">⚙️ Устройства</a>
+                <span style="font-size:0.7rem;opacity:0.6;margin-left:15px">v{__version__}</span>
+            </h1>
         </div>
     </header>
     <div class="container">
@@ -495,6 +504,475 @@ def api_clear_memory():
 def api_version():
     """API endpoint for application version."""
     return jsonify({'version': __version__})
+
+
+# ============================================================
+# Device Management
+# ============================================================
+
+DEVICES_TEMPLATE = '''
+<div class="card">
+    <h2>📋 Подключённые устройства</h2>
+    {% if devices %}
+    <table>
+        <thead>
+            <tr>
+                <th>Тип</th>
+                <th>Регистры</th>
+                <th>Enum</th>
+                <th>Faults</th>
+                <th>Payload keys</th>
+                <th>Действия</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for d in devices %}
+            <tr>
+                <td><strong>{{ d.device_type|upper }}</strong></td>
+                <td>{{ d.register_count }}</td>
+                <td>{{ d.enum_count }}</td>
+                <td>{{ d.fault_count }}</td>
+                <td>{{ d.payload_keys|join(', ') or '—' }}</td>
+                <td>
+                    <button class="btn btn-danger" style="padding:4px 10px;font-size:0.8rem"
+                        onclick="removeDevice('{{ d.device_type }}')">Удалить</button>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>Нет подключённых устройств.</p>
+    {% endif %}
+</div>
+
+{% if unknown_keys %}
+<div class="card">
+    <h2>🔍 Обнаружены, но не настроены</h2>
+    <table>
+        <thead>
+            <tr><th>Ключ payload</th><th>Сообщений</th><th>Последнее</th></tr>
+        </thead>
+        <tbody>
+        {% for key, info in unknown_keys.items() %}
+            <tr>
+                <td><strong>{{ key }}</strong></td>
+                <td>{{ info.count }}</td>
+                <td>{{ info.last_seen_ago }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if decode_errors %}
+<div class="card">
+    <h2>⚠️ Последние ошибки декодирования ({{ decode_errors|length }})</h2>
+    <table>
+        <thead>
+            <tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th></tr>
+        </thead>
+        <tbody>
+        {% for e in decode_errors %}
+            <tr>
+                <td style="font-size:0.8rem">{{ e.time_ago }}</td>
+                <td>{{ e.router_sn }}</td>
+                <td>{{ e.bserver_id }}</td>
+                <td>{{ e.device_type }}</td>
+                <td>{{ e.addr }}</td>
+                <td>{{ e.reason }}</td>
+                <td class="raw-value">{{ e.raw_data or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <button class="btn" style="margin-top:10px" onclick="clearErrors()">Очистить ошибки</button>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>➕ Добавить устройство</h2>
+    <form id="add-device-form" enctype="multipart/form-data">
+        <table>
+            <tr>
+                <td><strong>Имя устр��йства</strong> <small>(латиница, без пробелов)</small></td>
+                <td><input type="text" name="device_type" placeholder="dse" required
+                    style="padding:6px;width:200px;border:1px solid #ccc;border-radius:4px"></td>
+            </tr>
+            <tr>
+                <td><strong>Payload keys</strong> <small>(через запятую)</small></td>
+                <td><input type="text" name="payload_keys" placeholder="DSE_8610,Modbus_DSE" required
+                    style="padding:6px;width:300px;border:1px solid #ccc;border-radius:4px"></td>
+            </tr>
+            <tr>
+                <td><strong>register_map.jsonl</strong> <small>(обязательно)</small></td>
+                <td><input type="file" name="register_map" accept=".jsonl" required></td>
+            </tr>
+            <tr>
+                <td><strong>enum_map.json</strong> <small>(опционально)</small></td>
+                <td><input type="file" name="enum_map" accept=".json"></td>
+            </tr>
+            <tr>
+                <td><strong>fault_bitmap_map.jsonl</strong> <small>(опционально)</small></td>
+                <td><input type="file" name="fault_bitmap_map" accept=".jsonl"></td>
+            </tr>
+        </table>
+        <div style="margin-top:15px">
+            <button type="button" class="btn" onclick="validateDevice()">✅ Проверить</button>
+            <button type="button" class="btn" style="background:#27ae60" onclick="addDevice()">💾 Сохранить и запустить</button>
+        </div>
+        <div id="form-result" style="margin-top:10px"></div>
+    </form>
+</div>
+
+<div class="card">
+    <h2>📝 Как подготовить карты регистров</h2>
+    <ol style="padding-left:20px;line-height:2">
+        <li>Возьмите документацию на устройство (PDF с описанием Modbus-регистров)</li>
+        <li>Скопируйте промпт ниже и отправьте его вместе с документацией в любой ИИ (ChatGPT, Claude и т.д.)</li>
+        <li>На выходе получите файлы <code>register_map.jsonl</code>, <code>enum_map.json</code>, <code>fault_bitmap_map.jsonl</code></li>
+        <li>Загрузите файлы через форму выше</li>
+    </ol>
+    <details style="margin-top:15px">
+        <summary style="cursor:pointer;font-weight:600;color:#3498db">📋 Показать промпт для ИИ</summary>
+        <pre id="ai-prompt" style="margin-top:10px;background:#f8f9fa;padding:15px;border-radius:4px;font-size:0.85rem;white-space:pre-wrap;border:1px solid #ddd;max-height:400px;overflow-y:auto">Преобразуй документацию Modbus-регистров в три файла для декодера.
+
+ФОРМАТ 1: register_map.jsonl (каждая строка — отдельный JSON-объект)
+{"addr": 40010, "reg_type": "holding", "name": "Engine Speed", "data_type": "u16", "word_len": 1, "multiplier": 1.0, "offset": 0.0, "unit": "rpm", "na_values": [65535], "description": "Обороты двигателя"}
+
+Допустимые data_type: u16, s16, u32, s32, f32, raw, char, bitfield
+Допустимые reg_type: holding, input
+Для enum-регистров: unit = "enum"
+word_len: 1 для 16-бит, 2 для 32-бит типов
+
+ФОРМАТ 2: enum_map.json (один JSON-объект)
+{
+  "holding:40010": {"0": "Off", "1": "On", "2": "Error"},
+  "holding:40011": {"0": "Stop", "1": "Run"}
+}
+��люч = "reg_type:addr", значения = {"числовое_значение_строкой": "текстовая_метка"}
+
+ФОРМАТ 3: fault_bitmap_map.jsonl (каждая строка — отдельный JSON-объект)
+{"addr": 40400, "reg_type": "holding", "bit": 0, "name": "Low Oil Pressure", "severity": "warning", "description": "Низкое давление масла"}
+
+bit: от 0 до 15 (позиция бита в 16-битном регистре)
+severity: info, warning, critical
+
+Правила:
+- Адрес addr = 40000 + смещение из документации
+- Каждая строка JSONL — валидный JSON
+- Кодировка UTF-8
+- Числа без кавычек, строки в кавычках</pre>
+        <button class="btn" style="margin-top:5px;font-size:0.8rem" onclick="copyPrompt()">📋 Копировать промпт</button>
+    </details>
+</div>
+
+<script>
+async function validateDevice() {
+    const form = document.getElementById('add-device-form');
+    const data = new FormData(form);
+    const result = document.getElementById('form-result');
+    result.innerHTML = 'Проверка...';
+    try {
+        const resp = await fetch('/api/devices/validate', {method: 'POST', body: data});
+        const json = await resp.json();
+        if (json.valid) {
+            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ Карты валидны! ' +
+                'Регистры: ' + json.register_map.count +
+                ', Enum: ' + json.enum_map.count +
+                ', Faults: ' + json.fault_bitmap_map.count + '</span>';
+        } else {
+            let html = '<span style="color:#e74c3c;font-weight:bold">❌ Найдены ошибки (' + json.total_errors + '):</span><ul>';
+            const allErrors = (json.register_map.errors || [])
+                .concat(json.enum_map.errors || [])
+                .concat(json.fault_bitmap_map.errors || []);
+            allErrors.slice(0, 20).forEach(e => html += '<li style="color:#e74c3c;font-size:0.9rem">' + e + '</li>');
+            if (allErrors.length > 20) html += '<li>...ещё ' + (allErrors.length - 20) + ' ошибок</li>';
+            html += '</ul>';
+            result.innerHTML = html;
+        }
+    } catch (e) { result.innerHTML = '<span style="color:#e74c3c">Ошибка: ' + e + '</span>'; }
+}
+
+async function addDevice() {
+    const form = document.getElementById('add-device-form');
+    const data = new FormData(form);
+    const result = document.getElementById('form-result');
+    result.innerHTML = 'Сохранение...';
+    try {
+        const resp = await fetch('/api/devices/add', {method: 'POST', body: data});
+        const json = await resp.json();
+        if (json.ok) {
+            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ ' + json.message + '</span>';
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            result.innerHTML = '<span style="color:#e74c3c;font-weight:bold">❌ ' + json.error + '</span>';
+        }
+    } catch (e) { result.innerHTML = '<span style="color:#e74c3c">Ошибка: ' + e + '</span>'; }
+}
+
+async function removeDevice(deviceType) {
+    if (!confirm('Удалить устройство "' + deviceType + '"? Файлы карт НЕ удаляются.')) return;
+    try {
+        const resp = await fetch('/api/devices/' + deviceType, {method: 'DELETE'});
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch (e) { alert('Ошибка: ' + e); }
+}
+
+async function clearErrors() {
+    try {
+        await fetch('/api/decode-errors', {method: 'DELETE'});
+        location.reload();
+    } catch (e) { alert('Ошибка: ' + e); }
+}
+
+function copyPrompt() {
+    const text = document.getElementById('ai-prompt').textContent;
+    navigator.clipboard.writeText(text).then(() => alert('Промпт скопирован!'));
+}
+</script>
+'''
+
+
+@app.route('/devices')
+def devices_page():
+    """Device management page."""
+    mqtt = get_mqtt_client()
+    store = get_store()
+
+    # Configured devices
+    devices = []
+    device_types = get_registered_device_types()
+    # Get payload key map from mqtt client
+    key_map = mqtt._payload_key_map if mqtt else {}
+
+    for dt in device_types:
+        stats = get_device_stats(dt)
+        payload_keys = [k for k, v in key_map.items() if v == dt]
+        devices.append({
+            'device_type': dt,
+            'register_count': stats['register_count'] if stats else 0,
+            'enum_count': stats['enum_count'] if stats else 0,
+            'fault_count': stats['fault_count'] if stats else 0,
+            'payload_keys': payload_keys,
+        })
+
+    # Unknown keys from auto-discovery
+    unknown_keys = {}
+    if mqtt:
+        raw_unknown = mqtt.get_unknown_keys()
+        now = time.time()
+        for key, info in raw_unknown.items():
+            age = now - info['last_seen']
+            if age < 60:
+                ago = f"{int(age)}с назад"
+            elif age < 3600:
+                ago = f"{int(age/60)}м назад"
+            else:
+                ago = f"{int(age/3600)}ч назад"
+            unknown_keys[key] = {
+                'count': info['count'],
+                'last_seen_ago': ago
+            }
+
+    # Decode errors
+    raw_errors = store.get_decode_errors(30)
+    now = time.time()
+    decode_errors = []
+    for e in raw_errors:
+        age = now - e['timestamp']
+        if age < 60:
+            ago = f"{int(age)}с назад"
+        elif age < 3600:
+            ago = f"{int(age/60)}м назад"
+        else:
+            ago = f"{int(age/3600)}ч назад"
+        decode_errors.append({**e, 'time_ago': ago})
+
+    content = render_template_string(
+        DEVICES_TEMPLATE,
+        devices=devices,
+        unknown_keys=unknown_keys,
+        decode_errors=decode_errors
+    )
+    return wrap_content('Устройства', content)
+
+
+@app.route('/api/devices/validate', methods=['POST'])
+def api_validate_device():
+    """Validate uploaded map files without saving."""
+    import tempfile
+    import shutil
+
+    device_type = request.form.get('device_type', '').strip().lower()
+    if not device_type:
+        return jsonify({'valid': False, 'error': 'Не указано имя устройства'}), 400
+
+    # Save uploaded files to temp dir for validation
+    tmpdir = tempfile.mkdtemp()
+    try:
+        reg_file = request.files.get('register_map')
+        if reg_file and reg_file.filename:
+            reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
+
+        enum_file = request.files.get('enum_map')
+        if enum_file and enum_file.filename:
+            enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
+
+        fault_file = request.files.get('fault_bitmap_map')
+        if fault_file and fault_file.filename:
+            fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
+
+        result = validate_device_maps(tmpdir)
+        return jsonify(result)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.route('/api/devices/add', methods=['POST'])
+def api_add_device():
+    """Add a new device: save maps, update config, hot reload."""
+    import yaml
+
+    device_type = request.form.get('device_type', '').strip().lower()
+    payload_keys_str = request.form.get('payload_keys', '').strip()
+
+    if not device_type:
+        return jsonify({'ok': False, 'error': 'Не указано имя устройства'}), 400
+    if not device_type.isalnum():
+        return jsonify({'ok': False, 'error': 'Имя устройства: только латиница и цифры'}), 400
+    if not payload_keys_str:
+        return jsonify({'ok': False, 'error': 'Не указаны payload keys'}), 400
+
+    payload_keys = [k.strip() for k in payload_keys_str.split(',') if k.strip()]
+
+    # Save files to maps/<device_type>/
+    maps_dir = os.path.join('maps', device_type)
+    os.makedirs(maps_dir, exist_ok=True)
+
+    reg_file = request.files.get('register_map')
+    if not reg_file or not reg_file.filename:
+        return jsonify({'ok': False, 'error': 'register_map.jsonl обязателен'}), 400
+
+    # Save to temp first, validate, then move
+    import tempfile
+    import shutil
+    tmpdir = tempfile.mkdtemp()
+    try:
+        reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
+
+        enum_file = request.files.get('enum_map')
+        if enum_file and enum_file.filename:
+            enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
+
+        fault_file = request.files.get('fault_bitmap_map')
+        if fault_file and fault_file.filename:
+            fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
+
+        # Validate
+        validation = validate_device_maps(tmpdir)
+        if not validation['valid']:
+            return jsonify({'ok': False, 'error': f"Карты невалидны ({validation['total_errors']} ошибок). Проверьте сначала."}), 400
+
+        # Move to final location
+        for filename in os.listdir(tmpdir):
+            shutil.copy2(os.path.join(tmpdir, filename), os.path.join(maps_dir, filename))
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # Load maps (hot reload)
+    ok = load_device_maps(device_type, maps_dir)
+    if not ok:
+        return jsonify({'ok': False, 'error': 'Не удалось загрузить карты'}), 500
+
+    # Update MQTT client payload key mapping
+    mqtt = get_mqtt_client()
+    if mqtt:
+        new_map = {key: device_type for key in payload_keys}
+        mqtt.update_payload_key_map(new_map)
+
+    # Update config.yaml
+    _update_config_devices(device_type, maps_dir, payload_keys)
+
+    logger.info(f"Устройство '{device_type}' добавлено: keys={payload_keys}, maps={maps_dir}")
+    return jsonify({
+        'ok': True,
+        'message': f"Устройство '{device_type}' добавлено и запущено"
+    })
+
+
+@app.route('/api/devices/<device_type>', methods=['DELETE'])
+def api_remove_device(device_type: str):
+    """Remove a device type from runtime (files are kept)."""
+    removed = remove_device(device_type)
+    if not removed:
+        return jsonify({'ok': False, 'error': f"Устройство '{device_type}' не найдено"}), 404
+
+    # Remove payload keys from MQTT client
+    mqtt = get_mqtt_client()
+    if mqtt:
+        with mqtt._lock:
+            keys_to_remove = [k for k, v in mqtt._payload_key_map.items() if v == device_type]
+            for k in keys_to_remove:
+                del mqtt._payload_key_map[k]
+
+    logger.info(f"Устройство '{device_type}' удалено из runtime")
+    return jsonify({'ok': True})
+
+
+@app.route('/api/discovery')
+def api_discovery():
+    """API endpoint for auto-discovered unknown keys."""
+    mqtt = get_mqtt_client()
+    if not mqtt:
+        return jsonify({})
+    return jsonify(mqtt.get_unknown_keys())
+
+
+@app.route('/api/decode-errors')
+def api_decode_errors():
+    """API endpoint for recent decode errors."""
+    store = get_store()
+    return jsonify(store.get_decode_errors())
+
+
+@app.route('/api/decode-errors', methods=['DELETE'])
+def api_clear_decode_errors():
+    """Clear decode error log."""
+    store = get_store()
+    count = store.clear_decode_errors()
+    return jsonify({'ok': True, 'cleared': count})
+
+
+def _update_config_devices(device_type: str, maps_dir: str, payload_keys: list):
+    """Update config.yaml with new device entry."""
+    import yaml
+
+    config_path = Path('config.yaml')
+    if not config_path.exists():
+        return
+
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+
+        if 'devices' not in config:
+            config['devices'] = {}
+
+        config['devices'][device_type] = {
+            'maps_dir': maps_dir,
+            'payload_keys': payload_keys
+        }
+
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        logger.info(f"config.yaml обновлён: добавлено устройство '{device_type}'")
+    except Exception as e:
+        logger.error(f"Ошибка обновления config.yaml: {e}")
 
 
 def run_web_ui(host: str = '0.0.0.0', port: int = 8080, debug: bool = False):

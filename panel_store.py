@@ -8,6 +8,7 @@ In-memory хранилище состояний панелей и декодир
 import time
 import threading
 import logging
+from collections import deque
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
@@ -85,6 +86,9 @@ class PanelStore:
         
         # Health thresholds
         self.stale_threshold = stale_threshold_sec
+
+        # Decode error log (last N errors with context)
+        self._decode_errors: deque = deque(maxlen=100)
         self.offline_threshold = offline_threshold_sec
     
     def _panel_key(self, router_sn: str, bserver_id: int) -> str:
@@ -260,6 +264,35 @@ class PanelStore:
                 'stale': stale,
                 'offline': offline
             }
+
+    def record_decode_error_detail(self, router_sn: str, bserver_id: int,
+                                    device_type: str, addr: str,
+                                    reason: str, raw_data: Any = None) -> None:
+        """Record a decode error with full context."""
+        with self._lock:
+            self._decode_errors.append({
+                'timestamp': time.time(),
+                'router_sn': router_sn,
+                'bserver_id': bserver_id,
+                'device_type': device_type,
+                'addr': addr,
+                'reason': reason,
+                'raw_data': str(raw_data)[:200] if raw_data is not None else None
+            })
+
+    def get_decode_errors(self, limit: int = 50) -> List[dict]:
+        """Get recent decode errors."""
+        with self._lock:
+            errors = list(self._decode_errors)
+            errors.reverse()  # newest first
+            return errors[:limit]
+
+    def clear_decode_errors(self) -> int:
+        """Clear decode error log. Returns count of cleared errors."""
+        with self._lock:
+            count = len(self._decode_errors)
+            self._decode_errors.clear()
+            return count
 
     def clear(self) -> dict:
         """Clear all in-memory panel and router data."""
