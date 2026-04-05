@@ -299,15 +299,20 @@ class MqttClient:
             self.messages_decoded += 1
 
         # Track decode errors with context (NA — штатная ситуация, не ошибка)
+        from maps_loader import is_ignored
         store = get_store()
         for reg in decoded_registers:
             reason = reg.get('reason')
             if reason and reason != 'Значение NA':
+                addr = reg.get('addr')
+                # Пропускаем регистры из ignore-list
+                if addr is not None and is_ignored(device_type, 'holding', int(addr)):
+                    continue
                 store.record_decode_error_detail(
                     router_sn=router_sn,
                     bserver_id=server_id,
                     device_type=device_type,
-                    addr=str(reg.get('addr', '?')),
+                    addr=str(addr or '?'),
                     reason=reason,
                     raw_data=reg.get('raw')
                 )

@@ -8,8 +8,9 @@
 
 import json
 import logging
+import threading
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,13 @@ class RegisterMapLoader:
 # ================================================================
 _loaders: Dict[str, RegisterMapLoader] = {}
 
+# ================================================================
+# Ignore list: device_type -> {"reg_type:addr": "comment"}
+# ================================================================
+_ignore_lists: Dict[str, Dict[str, str]] = {}
+_ignore_lock = threading.Lock()
+_device_dirs: Dict[str, str] = {}  # device_type -> maps_dir path
+
 
 def get_loader(device_type: str = 'pcc') -> Optional[RegisterMapLoader]:
     """Get the RegisterMapLoader for a specific device type."""
@@ -179,6 +187,11 @@ def load_device_maps(device_type: str, maps_dir: str) -> bool:
         return False
 
     _loaders[device_type] = loader
+    _device_dirs[device_type] = maps_dir
+
+    # Load ignore list if exists
+    _load_ignore_list(device_type, maps_dir)
+
     logger.info(f"Карты для устройства '{device_type}' загружены из {maps_dir}")
     return True
 
@@ -203,8 +216,103 @@ def get_device_stats(device_type: str) -> Optional[dict]:
     loader = _loaders.get(device_type)
     if not loader:
         return None
+    with _ignore_lock:
+        ignore_count = len(_ignore_lists.get(device_type, {}))
     return {
         'register_count': len(loader._register_map),
         'enum_count': len(loader._enum_map),
         'fault_count': len(loader._fault_bitmap_map),
+        'ignore_count': ignore_count,
     }
+
+
+# ================================================================
+# Ignore list management
+# ================================================================
+
+def _load_ignore_list(device_type: str, maps_dir: str):
+    """Load ignore_registers.json for a device type."""
+    path = Path(maps_dir) / 'ignore_registers.json'
+    with _ignore_lock:
+        if path.exists():
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    _ignore_lists[device_type] = json.load(f)
+                logger.info(f"Загружен ignore-list для '{device_type}': {len(_ignore_lists[device_type])} регистров")
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error(f"Ошибка загрузки ignore_registers.json для '{device_type}': {e}")
+                _ignore_lists[device_type] = {}
+        else:
+            _ignore_lists[device_type] = {}
+
+
+def _save_ignore_list(device_type: str):
+    """Save ignore_registers.json for a device type. Must be called under _ignore_lock."""
+    maps_dir = _device_dirs.get(device_type)
+    if not maps_dir:
+        return
+    path = Path(maps_dir) / 'ignore_registers.json'
+    try:
+        data = _ignore_lists.get(device_type, {})
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        logger.error(f"Ошибка сохранения ignore_registers.json для '{device_type}': {e}")
+
+
+def is_ignored(device_type: str, reg_type: str, addr: int) -> bool:
+    """Check if a register is in the ignore list."""
+    key = f"{reg_type}:{addr}"
+    with _ignore_lock:
+        return key in _ignore_lists.get(device_type, {})
+
+
+def add_to_ignore(device_type: str, reg_type: str, addr: int, comment: str = "") -> bool:
+    """Add a register to the ignore list. Returns True on success."""
+    if device_type not in _loaders:
+        return False
+    key = f"{reg_type}:{addr}"
+    with _ignore_lock:
+        if device_type not in _ignore_lists:
+            _ignore_lists[device_type] = {}
+        _ignore_lists[device_type][key] = comment or f"Игнорируется с UI"
+        _save_ignore_list(device_type)
+    logger.info(f"Регистр {key} добавлен в ignore-list '{device_type}': {comment}")
+    return True
+
+
+def remove_from_ignore(device_type: str, reg_type: str, addr: int) -> bool:
+    """Remove a register from the ignore list."""
+    key = f"{reg_type}:{addr}"
+    with _ignore_lock:
+        ignore = _ignore_lists.get(device_type, {})
+        if key in ignore:
+            del ignore[key]
+            _save_ignore_list(device_type)
+            logger.info(f"Регистр {key} убран из ignore-list '{device_type}'")
+            return True
+    return False
+
+
+def get_ignore_list(device_type: str) -> Dict[str, str]:
+    """Get ignore list for a device type. Returns {\"reg_type:addr\": \"comment\"}."""
+    with _ignore_lock:
+        return dict(_ignore_lists.get(device_type, {}))
+
+
+def get_all_ignore_lists() -> Dict[str, Dict[str, str]]:
+    """Get all ignore lists. Returns {device_type: {\"reg_type:addr\": \"comment\"}}."""
+    with _ignore_lock:
+        return {dt: dict(il) for dt, il in _ignore_lists.items() if il}
+
+
+def clear_ignore_list(device_type: str) -> int:
+    """Clear ignore list for a device type. Returns count of removed entries."""
+    with _ignore_lock:
+        ignore = _ignore_lists.get(device_type, {})
+        count = len(ignore)
+        _ignore_lists[device_type] = {}
+        _save_ignore_list(device_type)
+    if count:
+        logger.info(f"Ignore-list для '{device_type}' очищен ({count} записей)")
+    return count

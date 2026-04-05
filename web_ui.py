@@ -14,7 +14,8 @@ from flask import Flask, render_template_string, jsonify, abort, request
 
 from panel_store import get_store, PanelStatus
 from mqtt_client import get_mqtt_client
-from maps_loader import get_registered_device_types, get_device_stats, load_device_maps, remove_device
+from maps_loader import (get_registered_device_types, get_device_stats, load_device_maps, remove_device,
+                         add_to_ignore, remove_from_ignore, get_all_ignore_lists, clear_ignore_list)
 from map_validator import validate_device_maps
 from version import __version__
 
@@ -576,7 +577,7 @@ DEVICES_TEMPLATE = '''
     {% if decode_errors %}
     <table>
         <thead>
-            <tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th></tr>
+            <tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th><th></th></tr>
         </thead>
         <tbody>
         {% for e in decode_errors %}
@@ -588,6 +589,8 @@ DEVICES_TEMPLATE = '''
                 <td>{{ e.addr }}</td>
                 <td>{{ e.reason }}</td>
                 <td class="raw-value">{{ e.raw_data or '—' }}</td>
+                <td><button class="btn" style="padding:2px 8px;font-size:0.75rem"
+                    onclick="ignoreRegister('{{ e.device_type }}', '{{ e.addr }}')">Игнор</button></td>
             </tr>
         {% endfor %}
         </tbody>
@@ -601,6 +604,32 @@ DEVICES_TEMPLATE = '''
         <button class="btn btn-danger" onclick="clearErrors()">Очистить ошибки</button>
     </div>
 </div>
+
+{% if ignore_lists %}
+<div class="card">
+    <h2>🔇 Игнорируемые регистры</h2>
+    {% for device_type, registers in ignore_lists.items() %}
+    <h3 style="margin:10px 0 5px;font-size:0.95rem">{{ device_type|upper }} ({{ registers|length }})</h3>
+    <table>
+        <thead>
+            <tr><th>Регистр</th><th>Комментарий</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for key, comment in registers.items() %}
+            <tr>
+                <td><strong>{{ key }}</strong></td>
+                <td style="color:#666;font-size:0.9rem">{{ comment }}</td>
+                <td><button class="btn btn-danger" style="padding:2px 8px;font-size:0.75rem"
+                    onclick="unignoreRegister('{{ device_type }}', '{{ key }}')">Вернуть</button></td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <button class="btn btn-danger" style="margin-top:5px;font-size:0.8rem"
+        onclick="clearIgnoreList('{{ device_type }}')">Сбросить все для {{ device_type|upper }}</button>
+    {% endfor %}
+</div>
+{% endif %}
 
 <div class="card">
     <h2>➕ Добавить устройство</h2>
@@ -758,7 +787,7 @@ async function refreshErrors() {
             body.innerHTML = '<p style="color:#999">Нет ошибок</p>';
             return;
         }
-        let html = '<table><thead><tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th></tr></thead><tbody>';
+        let html = '<table><thead><tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th><th></th></tr></thead><tbody>';
         errors.forEach(e => {
             html += '<tr><td style="font-size:0.8rem">' + formatAge(e.timestamp) + '</td>'
                 + '<td>' + e.router_sn + '</td>'
@@ -766,11 +795,50 @@ async function refreshErrors() {
                 + '<td>' + e.device_type + '</td>'
                 + '<td>' + e.addr + '</td>'
                 + '<td>' + e.reason + '</td>'
-                + '<td class="raw-value">' + (e.raw_data || '—') + '</td></tr>';
+                + '<td class="raw-value">' + (e.raw_data || '—') + '</td>'
+                + '<td><button class="btn" style="padding:2px 8px;font-size:0.75rem" onclick="ignoreRegister(\'' + e.device_type + '\', \'' + e.addr + '\')">Игнор</button></td></tr>';
         });
         html += '</tbody></table>';
         body.innerHTML = html;
     } catch (e) { alert('Ошибка загрузки: ' + e); }
+}
+
+async function ignoreRegister(deviceType, addr) {
+    const comment = prompt('Комментарий (необязательно):', 'Не используется по документации');
+    if (comment === null) return;  // cancelled
+    try {
+        const resp = await fetch('/api/ignore', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({device_type: deviceType, addr: parseInt(addr), comment: comment})
+        });
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch (e) { alert('Ошибка: ' + e); }
+}
+
+async function unignoreRegister(deviceType, key) {
+    try {
+        const resp = await fetch('/api/ignore', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({device_type: deviceType, key: key})
+        });
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch (e) { alert('Ошибка: ' + e); }
+}
+
+async function clearIgnoreList(deviceType) {
+    if (!confirm('Сбросить весь ignore-list для "' + deviceType + '"?')) return;
+    try {
+        const resp = await fetch('/api/ignore/' + deviceType, {method: 'DELETE'});
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch (e) { alert('Ошибка: ' + e); }
 }
 
 function copyPrompt() {
@@ -847,11 +915,15 @@ def devices_page():
             ago = f"{int(age/3600)}ч назад"
         decode_errors.append({**e, 'time_ago': ago})
 
+    # Ignore lists
+    ignore_lists = get_all_ignore_lists()
+
     content = render_template_string(
         DEVICES_TEMPLATE,
         devices=devices,
         unknown_keys=unknown_keys,
-        decode_errors=decode_errors
+        decode_errors=decode_errors,
+        ignore_lists=ignore_lists
     )
     return wrap_content('Устройства', content, auto_reload=False)
 
@@ -999,6 +1071,66 @@ def api_clear_decode_errors():
     """Clear decode error log."""
     store = get_store()
     count = store.clear_decode_errors()
+    return jsonify({'ok': True, 'cleared': count})
+
+
+# ============================================================
+# Ignore List API
+# ============================================================
+
+@app.route('/api/ignore', methods=['GET'])
+def api_get_ignore():
+    """Get all ignore lists."""
+    return jsonify(get_all_ignore_lists())
+
+
+@app.route('/api/ignore', methods=['POST'])
+def api_add_ignore():
+    """Add a register to ignore list."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'ok': False, 'error': 'No JSON body'}), 400
+
+    device_type = data.get('device_type', '')
+    addr = data.get('addr')
+    comment = data.get('comment', '')
+
+    if not device_type or addr is None:
+        return jsonify({'ok': False, 'error': 'device_type и addr обязательны'}), 400
+
+    ok = add_to_ignore(device_type, 'holding', int(addr), comment)
+    if ok:
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'error': f"Устройство '{device_type}' не найдено"}), 404
+
+
+@app.route('/api/ignore', methods=['DELETE'])
+def api_remove_ignore():
+    """Remove a register from ignore list."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'ok': False, 'error': 'No JSON body'}), 400
+
+    device_type = data.get('device_type', '')
+    key = data.get('key', '')  # format "holding:40585"
+
+    if not device_type or not key:
+        return jsonify({'ok': False, 'error': 'device_type и key обязательны'}), 400
+
+    parts = key.split(':')
+    if len(parts) != 2:
+        return jsonify({'ok': False, 'error': 'Неверный формат ключа (ожидается reg_type:addr)'}), 400
+
+    ok = remove_from_ignore(device_type, parts[0], int(parts[1]))
+    if ok:
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'error': 'Регистр не найден в ignore-list'}), 404
+
+
+@app.route('/api/ignore/<device_type>', methods=['DELETE'])
+def api_clear_ignore(device_type: str):
+    """Clear entire ignore list for a device type."""
+    count = clear_ignore_list(device_type)
     return jsonify({'ok': True, 'cleared': count})
 
 
