@@ -596,7 +596,7 @@ DEVICES_TEMPLATE = '''
     <form id="add-device-form" enctype="multipart/form-data">
         <table>
             <tr>
-                <td><strong>Имя устр��йства</strong> <small>(латиница, без пробелов)</small></td>
+                <td><strong>Имя устройства</strong> <small>(латиница, без пробелов)</small></td>
                 <td><input type="text" name="device_type" placeholder="dse" required
                     style="padding:6px;width:200px;border:1px solid #ccc;border-radius:4px"></td>
             </tr>
@@ -651,7 +651,7 @@ word_len: 1 для 16-бит, 2 для 32-бит типов
   "holding:40010": {"0": "Off", "1": "On", "2": "Error"},
   "holding:40011": {"0": "Stop", "1": "Run"}
 }
-��люч = "reg_type:addr", значения = {"числовое_значение_строкой": "текстовая_метка"}
+Ключ = "reg_type:addr", значения = {"числовое_значение_строкой": "текстовая_метка"}
 
 ФОРМАТ 3: fault_bitmap_map.jsonl (каждая строка — отдельный JSON-объект)
 {"addr": 40400, "reg_type": "holding", "bit": 0, "name": "Low Oil Pressure", "severity": "warning", "description": "Низкое давление масла"}
