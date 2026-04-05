@@ -660,7 +660,7 @@ DEVICES_TEMPLATE = '''
         </table>
         <div style="margin-top:15px">
             <button type="button" class="btn" onclick="validateDevice()">✅ Проверить</button>
-            <button type="button" class="btn" style="background:#27ae60" onclick="addDevice()">💾 Сохранить и запустить</button>
+            <button type="button" id="btn-save" class="btn" style="background:#999;cursor:not-allowed" onclick="addDevice()" disabled>💾 Сохранить и запустить</button>
         </div>
         <div id="form-result" style="margin-top:10px"></div>
     </form>
@@ -715,21 +715,29 @@ async function validateDevice() {
     const form = document.getElementById('add-device-form');
     const data = new FormData(form);
     const result = document.getElementById('form-result');
+    const btnSave = document.getElementById('btn-save');
+    btnSave.disabled = true;
+    btnSave.style.background = '#999';
+    btnSave.style.cursor = 'not-allowed';
     result.innerHTML = 'Проверка...';
     try {
         const resp = await fetch('/api/devices/validate', {method: 'POST', body: data});
+        if (!resp.ok) { result.innerHTML = '<span style="color:#e74c3c">Ошибка сервера: HTTP ' + resp.status + '</span>'; return; }
         const json = await resp.json();
         if (json.valid) {
             result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ Карты валидны! ' +
                 'Регистры: ' + json.register_map.count +
                 ', Enum: ' + json.enum_map.count +
                 ', Faults: ' + json.fault_bitmap_map.count + '</span>';
+            btnSave.disabled = false;
+            btnSave.style.background = '#27ae60';
+            btnSave.style.cursor = 'pointer';
         } else {
-            let html = '<span style="color:#e74c3c;font-weight:bold">❌ Найдены ошибки (' + json.total_errors + '):</span><ul>';
-            const allErrors = (json.register_map.errors || [])
+            var html = '<span style="color:#e74c3c;font-weight:bold">❌ Найдены ошибки (' + json.total_errors + '):</span><ul>';
+            var allErrors = (json.register_map.errors || [])
                 .concat(json.enum_map.errors || [])
                 .concat(json.fault_bitmap_map.errors || []);
-            allErrors.slice(0, 20).forEach(e => html += '<li style="color:#e74c3c;font-size:0.9rem">' + e + '</li>');
+            allErrors.slice(0, 20).forEach(function(e) { html += '<li style="color:#e74c3c;font-size:0.9rem">' + e + '</li>'; });
             if (allErrors.length > 20) html += '<li>...ещё ' + (allErrors.length - 20) + ' ошибок</li>';
             html += '</ul>';
             result.innerHTML = html;
@@ -744,10 +752,15 @@ async function addDevice() {
     result.innerHTML = 'Сохранение...';
     try {
         const resp = await fetch('/api/devices/add', {method: 'POST', body: data});
-        const json = await resp.json();
+        var text = await resp.text();
+        var json;
+        try { json = JSON.parse(text); } catch(pe) {
+            result.innerHTML = '<span style="color:#e74c3c">Ошибка сервера (HTTP ' + resp.status + '): ' + text.substring(0, 200) + '</span>';
+            return;
+        }
         if (json.ok) {
             result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ ' + json.message + '</span>';
-            setTimeout(() => location.reload(), 1500);
+            setTimeout(function() { location.reload(); }, 1500);
         } else {
             result.innerHTML = '<span style="color:#e74c3c;font-weight:bold">❌ ' + json.error + '</span>';
         }
@@ -845,7 +858,23 @@ async function clearIgnoreList(deviceType) {
 
 function copyPrompt() {
     var text = document.getElementById('ai-prompt').textContent;
-    navigator.clipboard.writeText(text).then(function() { alert('Промпт скопирован!'); });
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() { alert('Промпт скопирован!'); }).catch(function() { fallbackCopy(text); });
+    } else {
+        fallbackCopy(text);
+    }
+}
+
+function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); alert('Промпт скопирован!'); }
+    catch(e) { alert('Не удалось скопировать. Выделите текст вручную.'); }
+    document.body.removeChild(ta);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -967,73 +996,76 @@ def api_validate_device():
 @app.route('/api/devices/add', methods=['POST'])
 def api_add_device():
     """Add a new device: save maps, update config, hot reload."""
-    import yaml
-
-    device_type = request.form.get('device_type', '').strip().lower()
-    payload_keys_str = request.form.get('payload_keys', '').strip()
-
-    if not device_type:
-        return jsonify({'ok': False, 'error': 'Не указано имя устройства'}), 400
-    if not device_type.isalnum():
-        return jsonify({'ok': False, 'error': 'Имя устройства: только латиница и цифры'}), 400
-    if not payload_keys_str:
-        return jsonify({'ok': False, 'error': 'Не указаны payload keys'}), 400
-
-    payload_keys = [k.strip() for k in payload_keys_str.split(',') if k.strip()]
-
-    # Save files to maps/<device_type>/
-    maps_dir = os.path.join('maps', device_type)
-    os.makedirs(maps_dir, exist_ok=True)
-
-    reg_file = request.files.get('register_map')
-    if not reg_file or not reg_file.filename:
-        return jsonify({'ok': False, 'error': 'register_map.jsonl обязателен'}), 400
-
-    # Save to temp first, validate, then move
     import tempfile
     import shutil
-    tmpdir = tempfile.mkdtemp()
+
     try:
-        reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
+        device_type = request.form.get('device_type', '').strip().lower()
+        payload_keys_str = request.form.get('payload_keys', '').strip()
 
-        enum_file = request.files.get('enum_map')
-        if enum_file and enum_file.filename:
-            enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
+        if not device_type:
+            return jsonify({'ok': False, 'error': 'Не указано имя устройства'}), 400
+        if not device_type.isalnum():
+            return jsonify({'ok': False, 'error': 'Имя устройства: только латиница и цифры'}), 400
+        if not payload_keys_str:
+            return jsonify({'ok': False, 'error': 'Не указаны payload keys'}), 400
 
-        fault_file = request.files.get('fault_bitmap_map')
-        if fault_file and fault_file.filename:
-            fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
+        payload_keys = [k.strip() for k in payload_keys_str.split(',') if k.strip()]
 
-        # Validate
-        validation = validate_device_maps(tmpdir)
-        if not validation['valid']:
-            return jsonify({'ok': False, 'error': f"Карты невалидны ({validation['total_errors']} ошибок). Проверьте сначала."}), 400
+        # Save files to maps/<device_type>/
+        maps_dir = os.path.join('maps', device_type)
+        os.makedirs(maps_dir, exist_ok=True)
 
-        # Move to final location
-        for filename in os.listdir(tmpdir):
-            shutil.copy2(os.path.join(tmpdir, filename), os.path.join(maps_dir, filename))
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        reg_file = request.files.get('register_map')
+        if not reg_file or not reg_file.filename:
+            return jsonify({'ok': False, 'error': 'register_map.jsonl обязателен'}), 400
 
-    # Load maps (hot reload)
-    ok = load_device_maps(device_type, maps_dir)
-    if not ok:
-        return jsonify({'ok': False, 'error': 'Не удалось загрузить карты'}), 500
+        # Save to temp first, validate, then move
+        tmpdir = tempfile.mkdtemp()
+        try:
+            reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
 
-    # Update MQTT client payload key mapping
-    mqtt = get_mqtt_client()
-    if mqtt:
-        new_map = {key: device_type for key in payload_keys}
-        mqtt.update_payload_key_map(new_map)
+            enum_file = request.files.get('enum_map')
+            if enum_file and enum_file.filename:
+                enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
 
-    # Update config.yaml
-    _update_config_devices(device_type, maps_dir, payload_keys)
+            fault_file = request.files.get('fault_bitmap_map')
+            if fault_file and fault_file.filename:
+                fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
 
-    logger.info(f"Устройство '{device_type}' добавлено: keys={payload_keys}, maps={maps_dir}")
-    return jsonify({
-        'ok': True,
-        'message': f"Устройство '{device_type}' добавлено и запущено"
-    })
+            # Validate
+            validation = validate_device_maps(tmpdir)
+            if not validation['valid']:
+                return jsonify({'ok': False, 'error': f"Карты невалидны ({validation['total_errors']} ошибок). Проверьте сначала."}), 400
+
+            # Move only uploaded files to final location
+            for filename in os.listdir(tmpdir):
+                shutil.copy2(os.path.join(tmpdir, filename), os.path.join(maps_dir, filename))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        # Load maps (hot reload)
+        ok = load_device_maps(device_type, maps_dir)
+        if not ok:
+            return jsonify({'ok': False, 'error': 'Не удалось загрузить карты'}), 500
+
+        # Update MQTT client payload key mapping
+        mqtt = get_mqtt_client()
+        if mqtt:
+            new_map = {key: device_type for key in payload_keys}
+            mqtt.update_payload_key_map(new_map)
+
+        # Update config.yaml
+        _update_config_devices(device_type, maps_dir, payload_keys)
+
+        logger.info(f"Устройство '{device_type}' добавлено: keys={payload_keys}, maps={maps_dir}")
+        return jsonify({
+            'ok': True,
+            'message': f"Устройство '{device_type}' добавлено и запущено"
+        })
+    except Exception as e:
+        logger.exception(f"Ошибка при добавлении устройства: {e}")
+        return jsonify({'ok': False, 'error': f"Внутренняя ошибка: {str(e)}"}), 500
 
 
 @app.route('/api/devices/<device_type>', methods=['DELETE'])

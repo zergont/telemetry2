@@ -71,7 +71,7 @@ class RegisterMapLoader:
         """
         path = Path(filepath)
         if not path.exists():
-            logger.error(f"Файл enum не найден: {filepath}")
+            logger.debug(f"Файл enum не найден (опционально): {filepath}")
             return 0
 
         try:
@@ -96,7 +96,7 @@ class RegisterMapLoader:
         """
         path = Path(filepath)
         if not path.exists():
-            logger.error(f"Файл fault bitmap не найден: {filepath}")
+            logger.debug(f"Файл fault bitmap не найден (опционально): {filepath}")
             return 0
 
         count = 0
