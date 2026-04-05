@@ -110,7 +110,7 @@ class MqttClient:
         Normalize a single Modbus record into unified shape.
         Returns { date_iso, server_id, full_addr (str), data_str } or None.
         """
-        # Shape A: has full_addr (string "406109") — legacy Modbus_PCC
+        # Shape A: has full_addr (string "406109") — legacy формат, на случай старых роутеров
         if 'full_addr' in inner:
             return {
                 'date_iso':  inner.get('date_iso_8601'),
@@ -119,7 +119,7 @@ class MqttClient:
                 'data_str':  inner.get('data'),
             }
 
-        # Shape B: has addr (int offset) + data — PCC_3_3 / input2 etc.
+        # Shape B: has addr (int offset) + data — актуальный формат (PCC_3_3 и т.д.)
         if 'addr' in inner and 'data' in inner:
             raw_addr = inner['addr']
             full_addr = f"4{int(raw_addr):05d}"

@@ -119,8 +119,6 @@ def load_maps_from_config(config: dict) -> tuple:
         # Default payload keys for PCC
         payload_key_map = {
             'PCC_3_3': 'pcc',
-            'Modbus_PCC': 'pcc',
-            'input2': 'pcc',
         }
 
     return ok, payload_key_map

@@ -79,8 +79,6 @@ devices:
     maps_dir: "maps/pcc"
     payload_keys:
       - "PCC_3_3"
-      - "Modbus_PCC"
-      - "input2"
 
   # Пример добавления нового устройства:
   # dse:
