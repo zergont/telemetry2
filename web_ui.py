@@ -708,7 +708,9 @@ severity: info, warning, critical
     </details>
 </div>
 
-<script>
+'''
+
+DEVICES_SCRIPT = '''<script>
 async function validateDevice() {
     const form = document.getElementById('add-device-form');
     const data = new FormData(form);
@@ -788,7 +790,7 @@ async function refreshErrors() {
             return;
         }
         let html = '<table><thead><tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th><th></th></tr></thead><tbody>';
-        errors.forEach(e => {
+        errors.forEach(function(e) {
             html += '<tr><td style="font-size:0.8rem">' + formatAge(e.timestamp) + '</td>'
                 + '<td>' + e.router_sn + '</td>'
                 + '<td>' + e.bserver_id + '</td>'
@@ -796,7 +798,7 @@ async function refreshErrors() {
                 + '<td>' + e.addr + '</td>'
                 + '<td>' + e.reason + '</td>'
                 + '<td class="raw-value">' + (e.raw_data || '—') + '</td>'
-                + '<td><button class="btn" style="padding:2px 8px;font-size:0.75rem" onclick="ignoreRegister(\'' + e.device_type + '\', \'' + e.addr + '\')">Игнор</button></td></tr>';
+                + '<td><button type="button" class="btn" style="padding:2px 8px;font-size:0.75rem" onclick="ignoreRegister(\\'' + e.device_type + '\\', \\'' + e.addr + '\\')">Игнор</button></td></tr>';
         });
         html += '</tbody></table>';
         body.innerHTML = html;
@@ -804,8 +806,8 @@ async function refreshErrors() {
 }
 
 async function ignoreRegister(deviceType, addr) {
-    const comment = prompt('Комментарий (необязательно):', 'Не используется по документации');
-    if (comment === null) return;  // cancelled
+    var comment = prompt('Комментарий (необязательно):', 'Не используется по документации');
+    if (comment === null) return;
     try {
         const resp = await fetch('/api/ignore', {
             method: 'POST',
@@ -842,22 +844,23 @@ async function clearIgnoreList(deviceType) {
 }
 
 function copyPrompt() {
-    const text = document.getElementById('ai-prompt').textContent;
-    navigator.clipboard.writeText(text).then(() => alert('Промпт скопирован!'));
+    var text = document.getElementById('ai-prompt').textContent;
+    navigator.clipboard.writeText(text).then(function() { alert('Промпт скопирован!'); });
 }
 
-// Сохранение/восстановление состояния <details> через sessionStorage
 document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('details').forEach(function(el, i) {
-        const key = 'details_state_' + i;
-        if (sessionStorage.getItem(key) === 'open') el.open = true;
-        el.addEventListener('toggle', function() {
-            sessionStorage.setItem(key, el.open ? 'open' : 'closed');
-        });
-    });
+    var details = document.querySelectorAll('details');
+    for (var i = 0; i < details.length; i++) {
+        (function(el, idx) {
+            var key = 'details_state_' + idx;
+            if (sessionStorage.getItem(key) === 'open') el.open = true;
+            el.addEventListener('toggle', function() {
+                sessionStorage.setItem(key, el.open ? 'open' : 'closed');
+            });
+        })(details[i], i);
+    }
 });
-</script>
-'''
+</script>'''
 
 
 @app.route('/devices')
@@ -925,7 +928,9 @@ def devices_page():
         decode_errors=decode_errors,
         ignore_lists=ignore_lists
     )
-    return wrap_content('Устройства', content, auto_reload=False)
+    html = wrap_content('Устройства', content, auto_reload=False)
+    # Вставляем скрипт устройств перед </body>, вне контейнера
+    return html.replace('</body>', DEVICES_SCRIPT + '\n</body>')
 
 
 @app.route('/api/devices/validate', methods=['POST'])
