@@ -19,7 +19,7 @@ from pathlib import Path
 
 import yaml
 
-from maps_loader import load_all_maps, load_device_maps
+from maps_loader import load_device_maps
 from panel_store import init_store
 from mqtt_client import init_mqtt_client
 from health_monitor import init_health_monitor
@@ -86,42 +86,27 @@ def load_maps_from_config(config: dict) -> tuple:
     """
     payload_key_map = {}
 
-    # --- New multi-device mode ---
     devices_config = config.get('devices')
-    if devices_config:
-        all_ok = True
-        for device_type, device_cfg in devices_config.items():
-            maps_dir = device_cfg.get('maps_dir', f'maps/{device_type}')
-            ok = load_device_maps(device_type, maps_dir)
-            print_status(ok, f"карты '{device_type}' из {maps_dir}")
-            if not ok:
-                all_ok = False
+    if not devices_config:
+        print("[ОШИБКА] Секция 'devices' не найдена в конфиге")
+        return False, {}
 
-            # Build payload_key -> device_type mapping
-            for key in device_cfg.get('payload_keys', []):
-                payload_key_map[key] = device_type
+    all_ok = True
+    for device_type, device_cfg in devices_config.items():
+        maps_dir = device_cfg.get('maps_dir', f'maps/{device_type}')
+        ok = load_device_maps(device_type, maps_dir)
+        print_status(ok, f"карты '{device_type}' из {maps_dir}")
+        if not ok:
+            all_ok = False
 
-        if not all_ok:
-            return False, {}
+        # Build payload_key -> device_type mapping
+        for key in device_cfg.get('payload_keys', []):
+            payload_key_map[key] = device_type
 
-        return True, payload_key_map
+    if not all_ok:
+        return False, {}
 
-    # --- Legacy single-device mode ---
-    maps_config = config.get('maps', {})
-    ok = load_all_maps(
-        register_map_path=maps_config.get('register_map', 'maps/register_map.jsonl'),
-        enum_map_path=maps_config.get('enum_map', 'maps/enum_map.json'),
-        fault_bitmap_path=maps_config.get('fault_bitmap_map', 'maps/fault_bitmap_map.jsonl')
-    )
-    print_status(ok, "карты загружены (legacy режим)")
-
-    if ok:
-        # Default payload keys for PCC
-        payload_key_map = {
-            'PCC_3_3': 'pcc',
-        }
-
-    return ok, payload_key_map
+    return True, payload_key_map
 
 
 def main():

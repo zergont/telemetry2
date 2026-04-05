@@ -186,25 +186,3 @@ def load_device_maps(device_type: str, maps_dir: str) -> bool:
 def get_registered_device_types() -> list:
     """Get list of all registered device types."""
     return list(_loaders.keys())
-
-
-# Backward compatibility
-def load_all_maps(register_map_path: str, enum_map_path: str, fault_bitmap_path: str) -> bool:
-    """
-    Load all map files (legacy single-device mode).
-    Creates a 'pcc' device type from individual file paths.
-    """
-    global _loaders
-
-    loader = RegisterMapLoader()
-
-    reg_count = loader.load_register_map(register_map_path)
-    loader.load_enum_map(enum_map_path)
-    loader.load_fault_bitmap_map(fault_bitmap_path)
-
-    if reg_count == 0:
-        logger.error("Ни один регистр не загружен — декодер не будет работать")
-        return False
-
-    _loaders['pcc'] = loader
-    return True
