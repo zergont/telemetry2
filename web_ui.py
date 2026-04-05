@@ -27,8 +27,9 @@ app = Flask(__name__)
 # ============================================================
 
 # Base HTML wrapper function
-def wrap_content(title: str, content: str) -> str:
+def wrap_content(title: str, content: str, auto_reload: bool = True) -> str:
     """Wrap content in base HTML template."""
+    reload_script = "setTimeout(function() { location.reload(); }, 5000);" if auto_reload else ""
     return f'''
 <!DOCTYPE html>
 <html lang="en">
@@ -161,7 +162,7 @@ def wrap_content(title: str, content: str) -> str:
     </div>
     <script>
         // Автообновление страницы каждые 5 секунд
-        setTimeout(function() {{ location.reload(); }}, 5000);
+        {reload_script}
 
         async function clearMemory() {{
             if (!confirm('Очистить все in-memory данные (роутеры, панели, регистры)?')) return;
@@ -216,7 +217,8 @@ INDEX_TEMPLATE = '''
         <tr><td>Получено сообщений</td><td>{{ mqtt_stats.messages_received }}</td></tr>
         <tr><td>Декодировано</td><td>{{ mqtt_stats.messages_decoded }}</td></tr>
         <tr><td>Опубликовано</td><td>{{ mqtt_stats.messages_published }}</td></tr>
-        <tr><td>Ошибки декодирования</td><td>{{ mqtt_stats.decode_errors }}</td></tr>
+        <tr><td>Ошибки MQTT</td><td>{{ mqtt_stats.decode_errors }}</td></tr>
+        <tr><td>Ошибки декодирования</td><td>{{ store_decode_errors }} <a href="/devices" style="font-size:0.8rem">(подробнее)</a></td></tr>
     </table>
 </div>
 {% endif %}
@@ -389,13 +391,15 @@ def index():
     routers_data.sort(key=lambda r: r['sn'])
     
     mqtt_stats = mqtt.get_stats() if mqtt else None
-    
+    store_decode_errors = len(store.get_decode_errors())
+
     # Render content first
     content = render_template_string(
         INDEX_TEMPLATE,
         stats=stats,
         routers=routers_data,
-        mqtt_stats=mqtt_stats
+        mqtt_stats=mqtt_stats,
+        store_decode_errors=store_decode_errors
     )
     
     # Wrap in base template
@@ -566,9 +570,10 @@ DEVICES_TEMPLATE = '''
 </div>
 {% endif %}
 
-{% if decode_errors %}
-<div class="card">
-    <h2>⚠️ Последние ошибки декодирования ({{ decode_errors|length }})</h2>
+<div class="card" id="decode-errors-card">
+    <h2>⚠️ Ошибки декодирования <span id="errors-count">({{ decode_errors|length }})</span></h2>
+    <div id="decode-errors-body">
+    {% if decode_errors %}
     <table>
         <thead>
             <tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th></tr>
@@ -587,9 +592,15 @@ DEVICES_TEMPLATE = '''
         {% endfor %}
         </tbody>
     </table>
-    <button class="btn" style="margin-top:10px" onclick="clearErrors()">Очистить ошибки</button>
+    {% else %}
+    <p style="color:#999">Нет ошибок</p>
+    {% endif %}
+    </div>
+    <div style="margin-top:10px">
+        <button class="btn" onclick="refreshErrors()">🔄 Обновить</button>
+        <button class="btn btn-danger" onclick="clearErrors()">Очистить ошибки</button>
+    </div>
 </div>
-{% endif %}
 
 <div class="card">
     <h2>➕ Добавить устройство</h2>
@@ -725,14 +736,58 @@ async function removeDevice(deviceType) {
 async function clearErrors() {
     try {
         await fetch('/api/decode-errors', {method: 'DELETE'});
-        location.reload();
+        refreshErrors();
     } catch (e) { alert('Ошибка: ' + e); }
+}
+
+function formatAge(ts) {
+    const age = (Date.now() / 1000) - ts;
+    if (age < 60) return Math.floor(age) + 'с назад';
+    if (age < 3600) return Math.floor(age / 60) + 'м назад';
+    return Math.floor(age / 3600) + 'ч назад';
+}
+
+async function refreshErrors() {
+    try {
+        const resp = await fetch('/api/decode-errors', {cache: 'no-store'});
+        const errors = await resp.json();
+        const body = document.getElementById('decode-errors-body');
+        const count = document.getElementById('errors-count');
+        count.textContent = '(' + errors.length + ')';
+        if (errors.length === 0) {
+            body.innerHTML = '<p style="color:#999">Нет ошибок</p>';
+            return;
+        }
+        let html = '<table><thead><tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th></tr></thead><tbody>';
+        errors.forEach(e => {
+            html += '<tr><td style="font-size:0.8rem">' + formatAge(e.timestamp) + '</td>'
+                + '<td>' + e.router_sn + '</td>'
+                + '<td>' + e.bserver_id + '</td>'
+                + '<td>' + e.device_type + '</td>'
+                + '<td>' + e.addr + '</td>'
+                + '<td>' + e.reason + '</td>'
+                + '<td class="raw-value">' + (e.raw_data || '—') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        body.innerHTML = html;
+    } catch (e) { alert('Ошибка загрузки: ' + e); }
 }
 
 function copyPrompt() {
     const text = document.getElementById('ai-prompt').textContent;
     navigator.clipboard.writeText(text).then(() => alert('Промпт скопирован!'));
 }
+
+// Сохранение/восстановление состояния <details> через sessionStorage
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('details').forEach(function(el, i) {
+        const key = 'details_state_' + i;
+        if (sessionStorage.getItem(key) === 'open') el.open = true;
+        el.addEventListener('toggle', function() {
+            sessionStorage.setItem(key, el.open ? 'open' : 'closed');
+        });
+    });
+});
 </script>
 '''
 
@@ -798,7 +853,7 @@ def devices_page():
         unknown_keys=unknown_keys,
         decode_errors=decode_errors
     )
-    return wrap_content('Устройства', content)
+    return wrap_content('Устройства', content, auto_reload=False)
 
 
 @app.route('/api/devices/validate', methods=['POST'])

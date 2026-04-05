@@ -298,16 +298,17 @@ class MqttClient:
         with self._lock:
             self.messages_decoded += 1
 
-        # Track decode errors with context
+        # Track decode errors with context (NA — штатная ситуация, не ошибка)
         store = get_store()
         for reg in decoded_registers:
-            if reg.get('reason'):
+            reason = reg.get('reason')
+            if reason and reason != 'Значение NA':
                 store.record_decode_error_detail(
                     router_sn=router_sn,
                     bserver_id=server_id,
                     device_type=device_type,
                     addr=str(reg.get('addr', '?')),
-                    reason=reg['reason'],
+                    reason=reason,
                     raw_data=reg.get('raw')
                 )
 
