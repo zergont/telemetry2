@@ -128,6 +128,21 @@ class MqttClient:
         with self._lock:
             return dict(self._unknown_keys)
 
+    def clear_unknown_key(self, key: str) -> bool:
+        """Remove a single key from unknown keys. Returns True if existed."""
+        with self._lock:
+            if key in self._unknown_keys:
+                del self._unknown_keys[key]
+                return True
+        return False
+
+    def clear_all_unknown_keys(self) -> int:
+        """Clear all unknown keys. Returns count of removed entries."""
+        with self._lock:
+            count = len(self._unknown_keys)
+            self._unknown_keys.clear()
+        return count
+
     def update_payload_key_map(self, new_map: Dict[str, str]):
         """Hot-update payload key mapping. Clears matched keys from unknown."""
         with self._lock:

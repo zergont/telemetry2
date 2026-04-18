@@ -551,12 +551,12 @@ DEVICES_TEMPLATE = '''
     {% endif %}
 </div>
 
-{% if unknown_keys %}
 <div class="card">
     <h2>🔍 Обнаружены, но не настроены</h2>
+    {% if unknown_keys %}
     <table>
         <thead>
-            <tr><th>Ключ payload</th><th>Сообщений</th><th>Последнее</th></tr>
+            <tr><th>Ключ payload</th><th>Сообщений</th><th>Последнее</th><th></th></tr>
         </thead>
         <tbody>
         {% for key, info in unknown_keys.items() %}
@@ -564,12 +564,19 @@ DEVICES_TEMPLATE = '''
                 <td><strong>{{ key }}</strong></td>
                 <td>{{ info.count }}</td>
                 <td>{{ info.last_seen_ago }}</td>
+                <td><button type="button" class="btn btn-danger" style="padding:2px 8px;font-size:0.75rem"
+                    onclick="clearUnknownKey('{{ key }}')">✕</button></td>
             </tr>
         {% endfor %}
         </tbody>
     </table>
+    <div style="margin-top:10px">
+        <button type="button" class="btn btn-danger" onclick="clearAllUnknownKeys()">Сбросить все</button>
+    </div>
+    {% else %}
+    <p style="color:#999">Нет неопознанных ключей</p>
+    {% endif %}
 </div>
-{% endif %}
 
 <div class="card" id="decode-errors-card">
     <h2>⚠️ Ошибки декодирования <span id="errors-count">({{ decode_errors|length }})</span></h2>
@@ -846,6 +853,25 @@ async function unignoreRegister(deviceType, key) {
     } catch (e) { alert('Ошибка: ' + e); }
 }
 
+async function clearUnknownKey(key) {
+    try {
+        const resp = await fetch('/api/discovery/' + encodeURIComponent(key), {method: 'DELETE'});
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch (e) { alert('Ошибка: ' + e); }
+}
+
+async function clearAllUnknownKeys() {
+    if (!confirm('Сбросить все неопознанные ключи?')) return;
+    try {
+        const resp = await fetch('/api/discovery', {method: 'DELETE'});
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch (e) { alert('Ошибка: ' + e); }
+}
+
 async function clearIgnoreList(deviceType) {
     if (!confirm('Сбросить весь ignore-list для "' + deviceType + '"?')) return;
     try {
@@ -1094,6 +1120,28 @@ def api_discovery():
     if not mqtt:
         return jsonify({})
     return jsonify(mqtt.get_unknown_keys())
+
+
+@app.route('/api/discovery', methods=['DELETE'])
+def api_clear_all_discovery():
+    """Clear all unknown keys."""
+    mqtt = get_mqtt_client()
+    if not mqtt:
+        return jsonify({'ok': False, 'error': 'MQTT не инициализирован'}), 500
+    count = mqtt.clear_all_unknown_keys()
+    return jsonify({'ok': True, 'cleared': count})
+
+
+@app.route('/api/discovery/<path:key>', methods=['DELETE'])
+def api_clear_discovery_key(key: str):
+    """Remove a single unknown key."""
+    mqtt = get_mqtt_client()
+    if not mqtt:
+        return jsonify({'ok': False, 'error': 'MQTT не инициализирован'}), 500
+    found = mqtt.clear_unknown_key(key)
+    if found:
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'error': f"Ключ '{key}' не найден"}), 404
 
 
 @app.route('/api/decode-errors')
