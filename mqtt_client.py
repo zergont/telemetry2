@@ -166,7 +166,7 @@ class MqttClient:
         Normalize a single Modbus record into unified shape.
         Returns { date_iso, server_id, full_addr (str), data_str } or None.
 
-        Формат: addr (int offset) + data
+        Старый формат: addr (int offset) + data
         """
         if 'addr' in inner and 'data' in inner:
             raw_addr = inner['addr']
@@ -180,6 +180,25 @@ class MqttClient:
 
         return None
 
+    @staticmethod
+    def _normalize_modbus_item(item: dict) -> Optional[dict]:
+        """
+        Normalize a single item from new Modbus-bus array format.
+        Returns { date_iso, server_id, full_addr (str), data_str } or None.
+
+        Новый формат: full_addr (str) + data + bserver_id
+        """
+        full_addr = item.get('full_addr')
+        data = item.get('data')
+        if full_addr is None or data is None:
+            return None
+        return {
+            'date_iso':  item.get('date_iso_8601'),
+            'server_id': item.get('bserver_id'),
+            'full_addr': str(full_addr),
+            'data_str':  data,
+        }
+
     def _normalize_raw(self, data: dict) -> list:
         """
         Raw Normalizer.
@@ -187,15 +206,38 @@ class MqttClient:
         Accepts any known payload shape and returns a LIST of unified dicts.
         Each dict includes 'device_type' resolved from the payload key.
 
-        Handles both single-object and batched-array payloads:
-          {"PCC_3_3": {"addr": ..., "data": ...}}            → [one record]
-          {"PCC_3_3": [{...}, {...}, {...}]}                  → [N records]
-          {"Modbus_PCC": {"full_addr": ..., "data": ...}}     → [one record]
+        Форматы:
+          Старый прямой:
+            {"PCC_3_3": {"addr": ..., "data": ...}}       → [one record]
+            {"PCC_3_3": [{...}, {...}]}                    → [N records]
+          Новый Modbus-шина:
+            {"Modbus": [{"server_name": "PCC", "full_addr": "400032",
+                         "bserver_id": 2, "data": "[...]"}, ...]}  → [N records]
 
         Returns empty list if nothing recognized.
         """
         results = []
 
+        # ── Новый формат: ключ "Modbus" — шина с массивом устройств ──────────
+        modbus_bus = data.get('Modbus')
+        if isinstance(modbus_bus, list):
+            for item in modbus_bus:
+                if not isinstance(item, dict):
+                    continue
+                server_name = item.get('server_name')
+                if not server_name:
+                    continue
+                device_type = self._resolve_device_type(server_name)
+                if device_type is None:
+                    self._track_unknown_key(server_name)
+                    continue
+                normalized = MqttClient._normalize_modbus_item(item)
+                if normalized:
+                    normalized['device_type'] = device_type
+                    results.append(normalized)
+            return results  # Новый формат — дальше не идём
+
+        # ── Старый формат: ключ верхнего уровня = идентификатор устройства ───
         for key, value in data.items():
             # Skip non-Modbus keys (e.g. GPS) and non-dict/list values
             if not isinstance(value, (dict, list)):
