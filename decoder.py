@@ -39,20 +39,20 @@ class ModbusDecoder:
 
         region_code = full_addr[0]
         offset_str = full_addr[1:]
+        offset = int(offset_str)
 
-        # Determine register type
+        # Determine register type and base address
         if region_code == '4':
             reg_type = 'holding'
+            addr = 40000 + offset
         elif region_code == '3':
             reg_type = 'input'
+            addr = 30000 + offset
         else:
-            reg_type = 'holding'  # Default
+            reg_type = 'holding'
+            addr = 40000 + offset
             if self.debug_mode:
                 logger.warning(f"Неизвестный код области '{region_code}', используется holding")
-
-        # Calculate address: base + offset
-        offset = int(offset_str)
-        addr = 40000 + offset
 
         return reg_type, addr
 
@@ -79,6 +79,16 @@ class ModbusDecoder:
         decoded_value = None
 
         try:
+            # Pre-decoded float values (e.g., Teltonika router sends already-converted floats)
+            # If the word is a float, treat it as already decoded — apply multiplier/offset only
+            first_word = words[word_idx]
+            if isinstance(first_word, float):
+                raw_value = first_word
+                if raw_value in na_values:
+                    return None, raw_value, "Значение NA"
+                decoded_value = raw_value * multiplier + offset
+                return decoded_value, raw_value, None
+
             if data_type in ('u16', 'raw'):
                 # Single 16-bit unsigned
                 raw_value = words[word_idx]
