@@ -181,6 +181,47 @@ def wrap_content(title: str, content: str, auto_reload: bool = True) -> str:
 '''
 
 
+RAW_TEMPLATE = '''
+<div class="card">
+    <h2>⚠️ Необработанные сообщения <span style="font-size:0.85rem;font-weight:normal;color:#999">(последние {{ messages|length }} из 10)</span></h2>
+    <div style="margin-bottom:15px">
+        <a href="/" class="btn">← Главная</a>
+        <button class="btn btn-danger" onclick="clearRaw()">🗑️ Очистить все</button>
+    </div>
+    {% if messages %}
+    {% for msg in messages|reverse %}
+    <details style="margin-bottom:8px;border:1px solid #ffeeba;border-radius:4px;background:#fffef8">
+        <summary style="cursor:pointer;padding:10px;font-size:0.9rem;list-style:none;display:flex;align-items:center;gap:8px">
+            <span style="display:inline-block;padding:2px 8px;border-radius:3px;font-size:0.78rem;white-space:nowrap;
+                {%- if msg.reason in ('json_error', 'missing_fields', 'exception') %} background:#e74c3c;color:white
+                {%- elif msg.reason == 'no_registers' %} background:#f39c12;color:white
+                {%- else %} background:#95a5a6;color:white{%- endif %}">{{ msg.reason }}</span>
+            <strong>{{ msg.ts }}</strong>
+            <code style="color:#555;font-size:0.82rem">{{ msg.topic }}</code>
+            {% if msg.key %}<code style="color:#888;font-size:0.82rem">{{ msg.key }}</code>{% endif %}
+        </summary>
+        <pre style="margin:0;padding:12px;background:#f8f9fa;border-top:1px solid #eee;font-size:0.8rem;white-space:pre-wrap;word-break:break-all;max-height:500px;overflow-y:auto">{{ msg.payload }}</pre>
+    </details>
+    {% endfor %}
+    {% else %}
+    <p style="color:#27ae60">✅ Необработанных сообщений нет.</p>
+    {% endif %}
+</div>
+'''
+
+RAW_SCRIPT = '''<script>
+async function clearRaw() {
+    if (!confirm('Очистить все необработанные сообщения?')) return;
+    try {
+        const resp = await fetch('/api/raw', {method: 'DELETE'});
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch(e) { alert('Ошибка: ' + e); }
+}
+</script>'''
+
+
 INDEX_TEMPLATE = '''
 <div class="stats">
     <div class="stat-box success">
@@ -204,6 +245,14 @@ INDEX_TEMPLATE = '''
         <div class="stat-label">Офлайн</div>
     </div>
 </div>
+
+{% if raw_undecoded_count > 0 %}
+<div class="card" style="border-left:4px solid #e74c3c">
+    <h2 style="color:#e74c3c">⚠️ Необработанные сообщения: {{ raw_undecoded_count }}</h2>
+    <p style="color:#666;margin-bottom:10px">Последние поступившие сообщения, которые не удалось декодировать.</p>
+    <a href="/raw" class="btn btn-danger">Посмотреть →</a>
+</div>
+{% endif %}
 
 {% if mqtt_stats %}
 <div class="card">
@@ -393,6 +442,7 @@ def index():
     
     mqtt_stats = mqtt.get_stats() if mqtt else None
     store_decode_errors = len(store.get_decode_errors())
+    raw_undecoded_count = len(mqtt.get_raw_undecoded()) if mqtt else 0
 
     # Render content first
     content = render_template_string(
@@ -400,7 +450,8 @@ def index():
         stats=stats,
         routers=routers_data,
         mqtt_stats=mqtt_stats,
-        store_decode_errors=store_decode_errors
+        store_decode_errors=store_decode_errors,
+        raw_undecoded_count=raw_undecoded_count,
     )
     
     # Wrap in base template
@@ -509,6 +560,39 @@ def api_clear_memory():
 def api_version():
     """API endpoint for application version."""
     return jsonify({'version': __version__})
+
+
+# ============================================================
+# Raw Undecoded Messages
+# ============================================================
+
+@app.route('/raw')
+def raw_page():
+    """Raw undecoded messages page."""
+    mqtt = get_mqtt_client()
+    messages = mqtt.get_raw_undecoded() if mqtt else []
+    content = render_template_string(RAW_TEMPLATE, messages=messages)
+    html = wrap_content('Необработанные', content, auto_reload=False)
+    return html.replace('</body>', RAW_SCRIPT + '\n</body>')
+
+
+@app.route('/api/raw')
+def api_get_raw():
+    """API endpoint for undecoded messages."""
+    mqtt = get_mqtt_client()
+    if not mqtt:
+        return jsonify([])
+    return jsonify(mqtt.get_raw_undecoded())
+
+
+@app.route('/api/raw', methods=['DELETE'])
+def api_clear_raw():
+    """Clear undecoded messages buffer."""
+    mqtt = get_mqtt_client()
+    if not mqtt:
+        return jsonify({'ok': False, 'error': 'MQTT не инициализирован'}), 500
+    count = mqtt.clear_raw_undecoded()
+    return jsonify({'ok': True, 'cleared': count})
 
 
 # ============================================================

@@ -11,6 +11,8 @@ import re
 import logging
 import time
 import threading
+import datetime
+from collections import deque
 from typing import Dict, Optional
 
 import paho.mqtt.client as mqtt
@@ -70,6 +72,9 @@ class MqttClient:
         # Auto-discovery: unknown payload keys -> {key: {count, first_seen, last_seen}}
         self._unknown_keys: Dict[str, dict] = {}
 
+        # Buffer for undecoded messages (last 10)
+        self._raw_undecoded: deque = deque(maxlen=10)
+
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         """Callback when connected to broker."""
         if rc == 0:
@@ -97,6 +102,9 @@ class MqttClient:
             self._process_message(msg.topic, msg.payload)
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
+            self._store_raw(msg.topic, 'exception',
+                            msg.payload.decode('utf-8', errors='replace'),
+                            str(e)[:200])
             with self._lock:
                 self.decode_errors += 1
 
@@ -233,6 +241,7 @@ class MqttClient:
             data = json.loads(payload.decode('utf-8'))
         except json.JSONDecodeError as e:
             logger.warning(f"Невалидный JSON: {e}")
+            self._store_raw(topic, 'json_error', payload.decode('utf-8', errors='replace'))
             with self._lock:
                 self.decode_errors += 1
             return
@@ -248,6 +257,9 @@ class MqttClient:
         if not normalized_list:
             if self.debug_mode:
                 logger.debug(f"Нераспознанная структура payload: {list(data.keys())}")
+            self._store_raw(topic, 'unknown_structure',
+                            json.dumps(data, ensure_ascii=False, indent=2),
+                            str(list(data.keys())))
             return
 
         if self.debug_mode and len(normalized_list) > 1:
@@ -277,6 +289,11 @@ class MqttClient:
 
         if server_id is None or full_addr is None or data_str is None:
             logger.warning(f"Отсутствуют обязательные поля после нормализации")
+            self._store_raw(
+                f"cg/v1/telemetry/SN/{router_sn}", 'missing_fields',
+                json.dumps(normalized, ensure_ascii=False, indent=2, default=str),
+                device_type
+            )
             with self._lock:
                 self.decode_errors += 1
             return
@@ -308,6 +325,12 @@ class MqttClient:
         if not decoded_registers:
             if self.debug_mode:
                 logger.debug(f"Нет декодированных регистров для {full_addr}")
+            self._store_raw(
+                f"cg/v1/telemetry/SN/{router_sn}", 'no_registers',
+                json.dumps({'device_type': device_type, 'full_addr': full_addr, 'data': words},
+                           ensure_ascii=False, indent=2),
+                f"{device_type}:{full_addr}"
+            )
             return
 
         with self._lock:
@@ -433,8 +456,37 @@ class MqttClient:
                 'messages_received': self.messages_received,
                 'messages_decoded': self.messages_decoded,
                 'messages_published': self.messages_published,
-                'decode_errors': self.decode_errors
+                'decode_errors': self.decode_errors,
+                'raw_undecoded': len(self._raw_undecoded),
             }
+
+    # ----------------------------------------------------------------
+    # Raw undecoded messages buffer
+    # ----------------------------------------------------------------
+
+    def _store_raw(self, topic: str, reason: str, payload: str = "", key: str = ""):
+        """Store an undecoded message for diagnostics review."""
+        entry = {
+            'ts': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'topic': topic,
+            'reason': reason,
+            'key': key,
+            'payload': payload,
+        }
+        with self._lock:
+            self._raw_undecoded.append(entry)
+
+    def get_raw_undecoded(self) -> list:
+        """Get list of recent undecoded messages (up to 10)."""
+        with self._lock:
+            return list(self._raw_undecoded)
+
+    def clear_raw_undecoded(self) -> int:
+        """Clear undecoded messages buffer. Returns count cleared."""
+        with self._lock:
+            count = len(self._raw_undecoded)
+            self._raw_undecoded.clear()
+        return count
 
 
 # Global client instance
