@@ -105,3 +105,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+# User data — managed via web UI, not tracked in git
+# Example maps are stored in maps.example/
+maps/

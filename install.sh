@@ -47,6 +47,16 @@ if [[ ! -f "${APP_DIR}/config.yaml" ]]; then
   echo "[INFO] Создан ${APP_DIR}/config.yaml. Проверьте настройки MQTT/Web."
 fi
 
+echo "[4b/7] Подготовка каталога maps/ (пользовательские данные)..."
+if [[ ! -d "${APP_DIR}/maps" ]]; then
+  mkdir -p "${APP_DIR}/maps"
+  if [[ -d "${APP_DIR}/maps.example" ]]; then
+    cp -a "${APP_DIR}/maps.example/." "${APP_DIR}/maps/"
+    echo "[INFO] Скопированы примеры карт из maps.example/ → maps/"
+  fi
+fi
+chown -R "${INSTALL_USER}:${INSTALL_USER}" "${APP_DIR}/maps"
+
 echo "[5/7] Создание systemd-сервиса ${SERVICE_NAME}..."
 cat > "${SERVICE_FILE}" <<EOF
 [Unit]
