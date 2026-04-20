@@ -625,6 +625,8 @@ DEVICES_TEMPLATE = '''
                 <td>
                     <button class="btn" style="padding:4px 10px;font-size:0.8rem"
                         onclick="editKeys('{{ d.device_type }}', '{{ d.payload_keys|join(', ') }}')">✏️ Ключи</button>
+                    <button class="btn" style="padding:4px 10px;font-size:0.8rem;background:#8e44ad"
+                        onclick="openUpdateMaps('{{ d.device_type }}')">📂 Карты</button>
                     <button class="btn btn-danger" style="padding:4px 10px;font-size:0.8rem"
                         onclick="removeDevice('{{ d.device_type }}')">Удалить</button>
                 </td>
@@ -801,6 +803,37 @@ severity: info, warning, critical
     </details>
 </div>
 
+<!-- Модальное окно обновления карт -->
+<div id="update-maps-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:white;border-radius:8px;padding:25px;max-width:500px;width:90%;box-shadow:0 4px 20px rgba(0,0,0,0.3)">
+        <h2 style="margin-bottom:15px;color:#2c3e50">📂 Обновить карты: <span id="modal-device-name" style="color:#8e44ad"></span></h2>
+        <p style="color:#666;font-size:0.9rem;margin-bottom:15px">Payload keys и настройки устройства не изменятся.</p>
+        <form id="update-maps-form" enctype="multipart/form-data">
+            <input type="hidden" name="device_type" id="modal-device-type">
+            <table style="width:100%">
+                <tr>
+                    <td style="padding:6px 0"><strong>register_map.jsonl</strong> <small>(обязательно)</small></td>
+                    <td><input type="file" name="register_map" accept=".jsonl" required style="font-size:0.85rem"></td>
+                </tr>
+                <tr>
+                    <td style="padding:6px 0"><strong>enum_map.json</strong> <small>(опционально)</small></td>
+                    <td><input type="file" name="enum_map" accept=".json" style="font-size:0.85rem"></td>
+                </tr>
+                <tr>
+                    <td style="padding:6px 0"><strong>fault_bitmap_map.jsonl</strong> <small>(опционально)</small></td>
+                    <td><input type="file" name="fault_bitmap_map" accept=".jsonl" style="font-size:0.85rem"></td>
+                </tr>
+            </table>
+            <div style="margin-top:15px">
+                <button type="button" class="btn" onclick="validateUpdateMaps()">✅ Проверить</button>
+                <button type="button" id="btn-update-save" class="btn" style="background:#999;cursor:not-allowed" disabled onclick="submitUpdateMaps()">💾 Сохранить</button>
+                <button type="button" class="btn btn-danger" onclick="closeUpdateMaps()">Отмена</button>
+            </div>
+            <div id="update-maps-result" style="margin-top:10px"></div>
+        </form>
+    </div>
+</div>
+
 '''
 
 DEVICES_SCRIPT = '''<script>
@@ -966,6 +999,68 @@ async function clearIgnoreList(deviceType) {
         if (json.ok) location.reload();
         else alert('Ошибка: ' + json.error);
     } catch (e) { alert('Ошибка: ' + e); }
+}
+
+function openUpdateMaps(deviceType) {
+    document.getElementById('modal-device-type').value = deviceType;
+    document.getElementById('modal-device-name').textContent = deviceType.toUpperCase();
+    document.getElementById('update-maps-result').innerHTML = '';
+    document.getElementById('update-maps-form').reset();
+    document.getElementById('modal-device-type').value = deviceType;
+    var btn = document.getElementById('btn-update-save');
+    btn.disabled = true; btn.style.background = '#999'; btn.style.cursor = 'not-allowed';
+    var modal = document.getElementById('update-maps-modal');
+    modal.style.display = 'flex';
+}
+
+function closeUpdateMaps() {
+    document.getElementById('update-maps-modal').style.display = 'none';
+}
+
+async function validateUpdateMaps() {
+    var form = document.getElementById('update-maps-form');
+    var data = new FormData(form);
+    var result = document.getElementById('update-maps-result');
+    var btn = document.getElementById('btn-update-save');
+    btn.disabled = true; btn.style.background = '#999'; btn.style.cursor = 'not-allowed';
+    result.innerHTML = 'Проверка...';
+    try {
+        var resp = await fetch('/api/devices/validate', {method: 'POST', body: data});
+        if (!resp.ok) { result.innerHTML = '<span style="color:#e74c3c">Ошибка сервера: HTTP ' + resp.status + '</span>'; return; }
+        var json = await resp.json();
+        if (json.valid) {
+            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ Валидно! Регистры: ' + json.register_map.count + ', Enum: ' + json.enum_map.count + ', Faults: ' + json.fault_bitmap_map.count + '</span>';
+            btn.disabled = false; btn.style.background = '#27ae60'; btn.style.cursor = 'pointer';
+        } else {
+            var html = '<span style="color:#e74c3c;font-weight:bold">❌ Ошибки (' + json.total_errors + '):</span><ul>';
+            var allErrors = (json.register_map.errors||[]).concat(json.enum_map.errors||[]).concat(json.fault_bitmap_map.errors||[]);
+            allErrors.slice(0,10).forEach(function(e){ html += '<li style="color:#e74c3c;font-size:0.85rem">' + e + '</li>'; });
+            html += '</ul>';
+            result.innerHTML = html;
+        }
+    } catch(e) { result.innerHTML = '<span style="color:#e74c3c">Ошибка: ' + e + '</span>'; }
+}
+
+async function submitUpdateMaps() {
+    var form = document.getElementById('update-maps-form');
+    var deviceType = document.getElementById('modal-device-type').value;
+    var data = new FormData(form);
+    var result = document.getElementById('update-maps-result');
+    result.innerHTML = 'Сохранение...';
+    try {
+        var resp = await fetch('/api/devices/' + deviceType + '/maps', {method: 'PUT', body: data});
+        var text = await resp.text();
+        var json;
+        try { json = JSON.parse(text); } catch(pe) {
+            result.innerHTML = '<span style="color:#e74c3c">Ошибка сервера: ' + text.substring(0,200) + '</span>'; return;
+        }
+        if (json.ok) {
+            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ ' + json.message + '</span>';
+            setTimeout(function(){ closeUpdateMaps(); location.reload(); }, 1200);
+        } else {
+            result.innerHTML = '<span style="color:#e74c3c;font-weight:bold">❌ ' + json.error + '</span>';
+        }
+    } catch(e) { result.innerHTML = '<span style="color:#e74c3c">Ошибка: ' + e + '</span>'; }
 }
 
 async function editKeys(deviceType, currentKeys) {
@@ -1320,6 +1415,61 @@ def api_clear_ignore(device_type: str):
     """Clear entire ignore list for a device type."""
     count = clear_ignore_list(device_type)
     return jsonify({'ok': True, 'cleared': count})
+
+
+@app.route('/api/devices/<device_type>/maps', methods=['PUT'])
+def api_update_device_maps(device_type: str):
+    """Replace map files for an existing device. Payload keys are preserved."""
+    import tempfile
+    import shutil
+
+    try:
+        if device_type not in get_registered_device_types():
+            return jsonify({'ok': False, 'error': f"Устройство '{device_type}' не найдено"}), 404
+
+        reg_file = request.files.get('register_map')
+        if not reg_file or not reg_file.filename:
+            return jsonify({'ok': False, 'error': 'register_map.jsonl обязателен'}), 400
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
+
+            enum_file = request.files.get('enum_map')
+            if enum_file and enum_file.filename:
+                enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
+
+            fault_file = request.files.get('fault_bitmap_map')
+            if fault_file and fault_file.filename:
+                fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
+
+            # Validate before overwriting
+            validation = validate_device_maps(tmpdir)
+            if not validation['valid']:
+                return jsonify({'ok': False, 'error': f"Карты невалидны ({validation['total_errors']} ошибок)"}), 400
+
+            # Overwrite files in maps/<device_type>/
+            maps_dir = os.path.join('maps', device_type)
+            os.makedirs(maps_dir, exist_ok=True)
+            for filename in os.listdir(tmpdir):
+                shutil.copy2(os.path.join(tmpdir, filename), os.path.join(maps_dir, filename))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        # Hot-reload maps
+        ok = load_device_maps(device_type, maps_dir)
+        if not ok:
+            return jsonify({'ok': False, 'error': 'Файлы сохранены, но загрузка не удалась'}), 500
+
+        stats = get_device_stats(device_type)
+        logger.info(f"Карты устройства '{device_type}' обновлены: {stats}")
+        return jsonify({
+            'ok': True,
+            'message': f"Карты '{device_type}' обновлены: {stats['register_count']} регистров"
+        })
+    except Exception as e:
+        logger.exception(f"Ошибка обновления карт '{device_type}': {e}")
+        return jsonify({'ok': False, 'error': f"Внутренняя ошибка: {str(e)}"}), 500
 
 
 @app.route('/api/devices/<device_type>/keys', methods=['PUT'])
