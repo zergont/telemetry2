@@ -91,19 +91,24 @@ def load_maps_from_config(config: dict) -> tuple:
         print("[ОШИБКА] Секция 'devices' не найдена в конфиге")
         return False, {}
 
-    all_ok = True
+    loaded = 0
     for device_type, device_cfg in devices_config.items():
         maps_dir = device_cfg.get('maps_dir', f'maps/{device_type}')
         ok = load_device_maps(device_type, maps_dir)
         print_status(ok, f"карты '{device_type}' из {maps_dir}")
         if not ok:
-            all_ok = False
+            logging.getLogger(__name__).error(
+                f"Карты устройства '{device_type}' не загружены — "
+                f"устройство будет пропущено. Проверьте {maps_dir}/"
+            )
+            continue
 
-        # Build payload_key -> device_type mapping
+        # Build payload_key -> device_type mapping only for loaded devices
         for key in device_cfg.get('payload_keys', []):
             payload_key_map[key] = device_type
+        loaded += 1
 
-    if not all_ok:
+    if loaded == 0:
         return False, {}
 
     return True, payload_key_map
@@ -151,7 +156,7 @@ def main():
     maps_ok, payload_key_map = load_maps_from_config(config)
 
     if not maps_ok:
-        logger.error("Не удалось загрузить карты — выход")
+        logger.error("Ни одно устройство не загружено — выход")
         sys.exit(1)
 
     logger.info(f"Маппинг payload ключей: {payload_key_map}")
