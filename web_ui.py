@@ -969,11 +969,7 @@ async function clearIgnoreList(deviceType) {
 }
 
 async function editKeys(deviceType, currentKeys) {
-    var newKeys = prompt(
-        'Payload keys для "' + deviceType + '" (через запятую):\n' +
-        'Пример: PCC_3_3, PCC, Modbus_PCC',
-        currentKeys
-    );
+    var newKeys = prompt('Payload keys для "' + deviceType + '" (через запятую). Пример: PCC_3_3, PCC, Modbus_PCC', currentKeys);
     if (newKeys === null) return;
     var keys = newKeys.split(',').map(function(k) { return k.trim(); }).filter(function(k) { return k; });
     if (keys.length === 0) { alert('Укажите хотя бы один ключ'); return; }
