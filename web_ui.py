@@ -623,6 +623,8 @@ DEVICES_TEMPLATE = '''
                 <td>{{ d.fault_count }}</td>
                 <td>{{ d.payload_keys|join(', ') or '—' }}</td>
                 <td>
+                    <button class="btn" style="padding:4px 10px;font-size:0.8rem"
+                        onclick="editKeys('{{ d.device_type }}', '{{ d.payload_keys|join(', ') }}')">✏️ Ключи</button>
                     <button class="btn btn-danger" style="padding:4px 10px;font-size:0.8rem"
                         onclick="removeDevice('{{ d.device_type }}')">Удалить</button>
                 </td>
@@ -966,6 +968,27 @@ async function clearIgnoreList(deviceType) {
     } catch (e) { alert('Ошибка: ' + e); }
 }
 
+async function editKeys(deviceType, currentKeys) {
+    var newKeys = prompt(
+        'Payload keys для "' + deviceType + '" (через запятую):\n' +
+        'Пример: PCC_3_3, PCC, Modbus_PCC',
+        currentKeys
+    );
+    if (newKeys === null) return;
+    var keys = newKeys.split(',').map(function(k) { return k.trim(); }).filter(function(k) { return k; });
+    if (keys.length === 0) { alert('Укажите хотя бы один ключ'); return; }
+    try {
+        const resp = await fetch('/api/devices/' + deviceType + '/keys', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({payload_keys: keys})
+        });
+        const json = await resp.json();
+        if (json.ok) location.reload();
+        else alert('Ошибка: ' + json.error);
+    } catch(e) { alert('Ошибка: ' + e); }
+}
+
 function copyPrompt() {
     var text = document.getElementById('ai-prompt').textContent;
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1301,6 +1324,68 @@ def api_clear_ignore(device_type: str):
     """Clear entire ignore list for a device type."""
     count = clear_ignore_list(device_type)
     return jsonify({'ok': True, 'cleared': count})
+
+
+@app.route('/api/devices/<device_type>/keys', methods=['PUT'])
+def api_update_device_keys(device_type: str):
+    """Update payload keys for an existing device (hot reload, no map re-upload)."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'ok': False, 'error': 'No JSON body'}), 400
+
+    payload_keys = data.get('payload_keys', [])
+    if not payload_keys:
+        return jsonify({'ok': False, 'error': 'payload_keys не может быть пустым'}), 400
+
+    if device_type not in get_registered_device_types():
+        return jsonify({'ok': False, 'error': f"Устройство '{device_type}' не найдено"}), 404
+
+    # Update MQTT client: remove old keys for this device, add new ones
+    mqtt = get_mqtt_client()
+    if mqtt:
+        with mqtt._lock:
+            # Remove all old keys pointing to this device
+            old_keys = [k for k, v in mqtt._payload_key_map.items() if v == device_type]
+            for k in old_keys:
+                del mqtt._payload_key_map[k]
+            # Add new keys
+            for key in payload_keys:
+                mqtt._payload_key_map[key] = device_type
+            # Clear matched unknown keys
+            for key in list(mqtt._unknown_keys):
+                if key in mqtt._payload_key_map:
+                    del mqtt._unknown_keys[key]
+
+    # Update config.yaml
+    _update_config_payload_keys(device_type, payload_keys)
+
+    logger.info(f"Payload keys для '{device_type}' обновлены: {payload_keys}")
+    return jsonify({'ok': True, 'payload_keys': payload_keys})
+
+
+def _update_config_payload_keys(device_type: str, payload_keys: list):
+    """Update only payload_keys for an existing device in config.yaml."""
+    import yaml
+
+    config_path = Path('config.yaml')
+    if not config_path.exists():
+        return
+
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+
+        if 'devices' not in config or device_type not in config['devices']:
+            return
+
+        config['devices'][device_type]['payload_keys'] = payload_keys
+
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        logger.info(f"config.yaml обновлён: payload_keys для '{device_type}' = {payload_keys}")
+    except Exception as e:
+        logger.error(f"Ошибка обновления config.yaml: {e}")
 
 
 def _update_config_devices(device_type: str, maps_dir: str, payload_keys: list):
