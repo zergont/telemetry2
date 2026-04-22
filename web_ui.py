@@ -10,7 +10,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Optional
-from flask import Flask, render_template_string, jsonify, abort, request
+from flask import Flask, render_template_string, jsonify, abort, request, send_file
 
 from panel_store import get_store, PanelStatus
 from mqtt_client import get_mqtt_client
@@ -807,7 +807,11 @@ severity: info, warning, critical
 <div id="update-maps-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
     <div style="background:white;border-radius:8px;padding:25px;max-width:500px;width:90%;box-shadow:0 4px 20px rgba(0,0,0,0.3)">
         <h2 style="margin-bottom:15px;color:#2c3e50">📂 Обновить карты: <span id="modal-device-name" style="color:#8e44ad"></span></h2>
-        <p style="color:#666;font-size:0.9rem;margin-bottom:15px">Payload keys и настройки устройства не изменятся.</p>
+        <p style="color:#666;font-size:0.9rem;margin-bottom:10px">Payload keys и настройки устройства не изменятся.</p>
+        <div id="modal-downloads" style="margin-bottom:15px;padding:10px;background:#f8f9fa;border-radius:4px;font-size:0.88rem">
+            <strong>Текущие файлы:</strong><br>
+            <span id="modal-dl-links" style="color:#666">загрузка...</span>
+        </div>
         <form id="update-maps-form" enctype="multipart/form-data">
             <input type="hidden" name="device_type" id="modal-device-type">
             <table style="width:100%">
@@ -1001,7 +1005,7 @@ async function clearIgnoreList(deviceType) {
     } catch (e) { alert('Ошибка: ' + e); }
 }
 
-function openUpdateMaps(deviceType) {
+async function openUpdateMaps(deviceType) {
     document.getElementById('modal-device-type').value = deviceType;
     document.getElementById('modal-device-name').textContent = deviceType.toUpperCase();
     document.getElementById('update-maps-result').innerHTML = '';
@@ -1009,8 +1013,22 @@ function openUpdateMaps(deviceType) {
     document.getElementById('modal-device-type').value = deviceType;
     var btn = document.getElementById('btn-update-save');
     btn.disabled = true; btn.style.background = '#999'; btn.style.cursor = 'not-allowed';
-    var modal = document.getElementById('update-maps-modal');
-    modal.style.display = 'flex';
+    document.getElementById('modal-dl-links').innerHTML = 'загрузка...';
+    document.getElementById('update-maps-modal').style.display = 'flex';
+    try {
+        var resp = await fetch('/api/devices/' + deviceType + '/maps');
+        var json = await resp.json();
+        var files = ['register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl'];
+        var links = files.map(function(f) {
+            if (json.files && json.files.indexOf(f) >= 0) {
+                return '<a href="/api/devices/' + deviceType + '/maps/' + f + '" download style="margin-right:12px;color:#3498db">📥 ' + f + '</a>';
+            }
+            return '<span style="margin-right:12px;color:#bbb">' + f + ' (нет)</span>';
+        }).join('');
+        document.getElementById('modal-dl-links').innerHTML = links;
+    } catch(e) {
+        document.getElementById('modal-dl-links').innerHTML = '<span style="color:#e74c3c">Ошибка загрузки списка файлов</span>';
+    }
 }
 
 function closeUpdateMaps() {
@@ -1415,6 +1433,31 @@ def api_clear_ignore(device_type: str):
     """Clear entire ignore list for a device type."""
     count = clear_ignore_list(device_type)
     return jsonify({'ok': True, 'cleared': count})
+
+
+@app.route('/api/devices/<device_type>/maps')
+def api_list_map_files(device_type: str):
+    """List available map files for a device."""
+    if device_type not in get_registered_device_types():
+        return jsonify({'ok': False, 'error': 'Не найдено'}), 404
+    maps_dir = Path('maps') / device_type
+    known = ['register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json']
+    files = [f for f in known if (maps_dir / f).exists()]
+    return jsonify({'ok': True, 'files': files})
+
+
+@app.route('/api/devices/<device_type>/maps/<filename>')
+def api_download_map_file(device_type: str, filename: str):
+    """Download a single map file."""
+    allowed = {'register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json'}
+    if filename not in allowed:
+        abort(404)
+    if device_type not in get_registered_device_types():
+        abort(404)
+    filepath = Path('maps') / device_type / filename
+    if not filepath.exists():
+        abort(404)
+    return send_file(str(filepath.resolve()), as_attachment=True, download_name=filename)
 
 
 @app.route('/api/devices/<device_type>/maps', methods=['PUT'])
