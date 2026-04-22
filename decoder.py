@@ -316,32 +316,32 @@ class ModbusDecoder:
             return []
 
         results = []
+        cursor = 0
 
-        # Track which word indices we've processed (for multi-word registers)
-        processed_indices = set()
+        while cursor < len(data):
+            addr = base_addr + cursor
 
-        for i, word in enumerate(data):
-            if i in processed_indices:
+            reg_def = loader.get_register(reg_type, addr)
+
+            if reg_def is None:
+                # Unknown register: advance by 1 word and record it
+                reg_words = data[cursor:cursor + 1]
+                result = self.decode_register(loader, reg_type, addr, reg_words)
+                results.append(result)
+                cursor += 1
                 continue
 
-            addr = base_addr + i
-
-            # Get register definition to check word length
-            reg_def = loader.get_register(reg_type, addr)
-            word_len = 1
-            if reg_def:
-                word_len = reg_def.get('word_len', 1)
+            word_len = reg_def.get('word_len', 1)
 
             # Get the words for this register
-            reg_words = data[i:i + word_len]
+            reg_words = data[cursor:cursor + word_len]
 
             # Decode
             result = self.decode_register(loader, reg_type, addr, reg_words)
             results.append(result)
 
-            # Mark processed indices (for multi-word, don't output tail registers)
-            for j in range(word_len):
-                processed_indices.add(i + j)
+            # Advance cursor by word_len (correct for u32/f32/etc.)
+            cursor += word_len
 
         # Sort by address
         results.sort(key=lambda x: x['addr'])
