@@ -13,7 +13,7 @@ from typing import List
 logger = logging.getLogger(__name__)
 
 # Допустимые значения
-VALID_DATA_TYPES = {'u16', 'u32', 's16', 's32', 'f32', 'raw', 'char', 'bitfield'}
+VALID_DATA_TYPES = {'u16', 'u32', 'u32_le', 's16', 's32', 'f32', 'raw', 'char', 'bitfield'}
 VALID_REG_TYPES = {'holding', 'input'}
 
 
@@ -80,6 +80,12 @@ def validate_register_map(filepath: str) -> List[str]:
             word_len = entry.get('word_len', 1)
             if not isinstance(word_len, (int, float)) or word_len < 1:
                 errors.append(f"Строка {line_num}: word_len должен быть >= 1, получено {word_len!r}")
+
+            # addr_stride (optional): address step, default = word_len
+            addr_stride = entry.get('addr_stride')
+            if addr_stride is not None:
+                if not isinstance(addr_stride, (int, float)) or addr_stride < 1:
+                    errors.append(f"Строка {line_num}: addr_stride должен быть >= 1, получено {addr_stride!r}")
 
             # multiplier
             multiplier = entry.get('multiplier', 1.0)

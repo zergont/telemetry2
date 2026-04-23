@@ -4,6 +4,31 @@
 Декодирует raw Modbus-данные по картам регистров.
 Поддерживает несколько типов устройств через device_type.
 Хардкод регистров запрещён.
+
+Поддерживаемые data_type в картах регистров:
+  u16       — 16-бит беззнаковое, word_len=1
+  s16       — 16-бит знаковое, word_len=1
+  u32       — 32-бит беззнаковое, big-endian (ABCD), word_len=2 (сырые слова)
+              Если word_len=1 — значение уже декодировано роутером (Teltonika 32bit UINT)
+  u32_le    — 32-бит беззнаковое, little-endian (DCBA), word_len=2 (сырые слова)
+              Если word_len=1 — значение уже декодировано роутером
+  s32       — 32-бит знаковое, big-endian, word_len=2
+  f32       — IEEE 754 float, word_len=2
+  raw       — возвращает сырое значение как есть (u16)
+  char      — символ (u16)
+  bitfield  — битовое поле (u16)
+
+Дополнительные поля карты регистров:
+  addr_stride — шаг по адресному пространству (по умолчанию = word_len).
+                Используется когда адресный шаг не совпадает с числом слов данных.
+                Пример: word_len=1, addr_stride=2 — роутер отдаёт одно готовое значение
+                на каждый u32-регистр, но адреса в документации идут через 2 (0x000C, 0x000E...).
+
+Примечание о pre-decoded значениях:
+  Роутеры Teltonika отправляют данные уже декодированными — один элемент массива
+  на регистр (не два 16-битных слова). В этом случае:
+  - float-значения обрабатываются автоматически (isinstance check)
+  - для int-значений (u32): word_len=1, addr_stride=2, адреса как в документации
 """
 
 import struct
@@ -107,10 +132,27 @@ class ModbusDecoder:
                 decoded_value = raw_value * multiplier + offset
 
             elif data_type == 'u32':
-                # Two 16-bit words, big-endian (AB order: hi, lo)
-                hi = words[word_idx]
-                lo = words[word_idx + 1] if word_idx + 1 < len(words) else 0
-                raw_value = (hi << 16) | lo
+                # Two 16-bit words, big-endian (ABCD order: hi, lo)
+                # If word_len=1: value is already decoded by router (Teltonika 32bit UINT)
+                if word_idx + 1 < len(words):
+                    hi = words[word_idx]
+                    lo = words[word_idx + 1]
+                    raw_value = (hi << 16) | lo
+                else:
+                    raw_value = words[word_idx]
+                if raw_value in na_values:
+                    return None, raw_value, "Значение NA"
+                decoded_value = raw_value * multiplier + offset
+
+            elif data_type == 'u32_le':
+                # Two 16-bit words, little-endian (DCBA order: lo, hi)
+                # If word_len=1: value is already decoded by router
+                if word_idx + 1 < len(words):
+                    lo = words[word_idx]
+                    hi = words[word_idx + 1]
+                    raw_value = (hi << 16) | lo
+                else:
+                    raw_value = words[word_idx]
                 if raw_value in na_values:
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
@@ -298,11 +340,19 @@ class ModbusDecoder:
 
         Args:
             full_addr: Full address string (e.g., "406109")
-            data: List of 16-bit word values
+            data: List of word values (raw 16-bit or pre-decoded by router)
             device_type: Device type to select correct register maps
 
         Returns:
             List of decoded register dicts, sorted by addr
+
+        Address vs data cursor:
+            Normally addr = base_addr + cursor (both advance by word_len).
+            When a register has addr_stride != word_len (e.g. pre-decoded u32 from Teltonika):
+              - cursor advances by word_len (data consumption)
+              - addr_offset advances by addr_stride (address space)
+            Example: word_len=1, addr_stride=2 — router sends one decoded value per u32 register,
+            but Modbus addresses still step by 2. Output addresses match the datasheet.
         """
         loader = get_loader(device_type)
         if not loader:
@@ -316,32 +366,37 @@ class ModbusDecoder:
             return []
 
         results = []
-        cursor = 0
+        cursor = 0       # index into data[]
+        addr_offset = 0  # offset from base_addr for register lookup
 
         while cursor < len(data):
-            addr = base_addr + cursor
+            addr = base_addr + addr_offset
 
             reg_def = loader.get_register(reg_type, addr)
 
             if reg_def is None:
-                # Unknown register: advance by 1 word and record it
+                # Unknown register: advance by 1 in both data and address space
                 reg_words = data[cursor:cursor + 1]
                 result = self.decode_register(loader, reg_type, addr, reg_words)
                 results.append(result)
                 cursor += 1
+                addr_offset += 1
                 continue
 
             word_len = reg_def.get('word_len', 1)
+            # addr_stride: how many address positions to advance (default = word_len)
+            # Use addr_stride=2 with word_len=1 for pre-decoded u32 from router
+            addr_stride = reg_def.get('addr_stride', word_len)
 
-            # Get the words for this register
+            # Get the data words for this register
             reg_words = data[cursor:cursor + word_len]
 
             # Decode
             result = self.decode_register(loader, reg_type, addr, reg_words)
             results.append(result)
 
-            # Advance cursor by word_len (correct for u32/f32/etc.)
             cursor += word_len
+            addr_offset += addr_stride
 
         # Sort by address
         results.sort(key=lambda x: x['addr'])
