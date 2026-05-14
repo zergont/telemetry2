@@ -807,7 +807,8 @@ word_len: 1 для 16-бит типов, 2 для 32-бит типов (u32, u32
 {"addr": 40400, "reg_type": "holding", "bit": 0, "name": "Low Oil Pressure", "severity": "warning", "description": "Низкое давление масла"}
 
 bit: от 0 до 15 (позиция бита в 16-битном регистре)
-severity: info, warning, critical
+severity: info, warning, critical, shutdown, unknown
+name и description — на русском языке
 
 Преобразование единиц через multiplier и offset:
   Декодер вычисляет: value = raw * multiplier + offset
@@ -822,6 +823,7 @@ severity: info, warning, critical
 - input-регистры (FC04): addr = 30000 + смещение из документации
 - Если данные приходят через Teltonika RUT (Modbus TCP → MQTT): смещение +1 к адресу
   (Teltonika нумерует регистры с 1, а не с 0)
+- Все текстовые поля (name, description) — на русском языке
 - Каждая строка JSONL — валидный JSON
 - Кодировка UTF-8
 - Числа без кавычек, строки в кавычках</pre>

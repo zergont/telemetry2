@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Допустимые значения
 VALID_DATA_TYPES = {'u16', 'u32', 'u32_le', 's16', 's32', 'f32', 'raw', 'char', 'bitfield'}
 VALID_REG_TYPES = {'holding', 'input'}
+VALID_SEVERITIES = {'info', 'warning', 'critical', 'shutdown', 'unknown'}
 
 
 def validate_register_map(filepath: str) -> List[str]:
@@ -223,6 +224,11 @@ def validate_fault_bitmap_map(filepath: str) -> List[str]:
             reg_type = entry.get('reg_type', 'holding')
             if reg_type not in VALID_REG_TYPES:
                 errors.append(f"Строка {line_num}: недопустимый reg_type '{reg_type}'")
+
+            severity = entry.get('severity')
+            if severity is not None and severity not in VALID_SEVERITIES:
+                errors.append(f"Строка {line_num}: недопустимый severity '{severity}', "
+                              f"допустимые: {', '.join(sorted(VALID_SEVERITIES))}")
 
             count += 1
 
