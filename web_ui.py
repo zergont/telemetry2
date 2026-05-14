@@ -776,10 +776,25 @@ DEVICES_TEMPLATE = '''
 ФОРМАТ 1: register_map.jsonl (каждая строка — отдельный JSON-объект)
 {"addr": 40010, "reg_type": "holding", "name": "Engine Speed", "data_type": "u16", "word_len": 1, "multiplier": 1.0, "offset": 0.0, "unit": "rpm", "na_values": [65535], "description": "Обороты двигателя"}
 
-Допустимые data_type: u16, s16, u32, s32, f32, raw, char, bitfield
+Допустимые data_type:
+  u16      — 16-бит беззнаковое, word_len=1
+  s16      — 16-бит знаковое, word_len=1
+  u32      — 32-бит беззнаковое, big-endian (ABCD), word_len=2
+  u32_le   — 32-бит беззнаковое, little-endian (DCBA), word_len=2
+  s32      — 32-бит знаковое, big-endian, word_len=2
+  f32      — IEEE 754 float, word_len=2
+  raw, char, bitfield — специальные типы, word_len=1
+
 Допустимые reg_type: holding, input
 Для enum-регистров: unit = "enum"
-word_len: 1 для 16-бит, 2 для 32-бит типов
+word_len: 1 для 16-бит типов, 2 для 32-бит типов (u32, u32_le, s32, f32)
+
+Поле addr_stride (опционально):
+  Используется когда роутер отдаёт уже декодированные 32-бит значения
+  (одно число на регистр вместо двух 16-битных слов).
+  В этом случае: word_len=1, addr_stride=2, data_type=u32.
+  Адреса в карте — как в документации (шаг 2).
+  Пример: {"addr": 30013, "data_type": "u32", "word_len": 1, "addr_stride": 2, ...}
 
 ФОРМАТ 2: enum_map.json (один JSON-объект)
 {
@@ -795,7 +810,10 @@ bit: от 0 до 15 (позиция бита в 16-битном регистре
 severity: info, warning, critical
 
 Правила:
-- Адрес addr = 40000 + смещение из документации
+- holding-регистры: addr = 40000 + смещение из документации
+- input-регистры (FC04): addr = 30000 + смещение из документации
+- Если данные приходят через Teltonika RUT (Modbus TCP → MQTT): смещение +1 к адресу
+  (Teltonika нумерует регистры с 1, а не с 0)
 - Каждая строка JSONL — валидный JSON
 - Кодировка UTF-8
 - Числа без кавычек, строки в кавычках</pre>
