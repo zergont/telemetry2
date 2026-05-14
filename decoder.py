@@ -315,20 +315,22 @@ class ModbusDecoder:
             elif self.debug_mode:
                 logger.debug(f"Нет определения enum для {addr}={raw}")
 
+        elif loader.is_fault_address(reg_type, addr):
+            # Address is in fault_bitmap_map — always decode as fault bitmap
+            # regardless of data_type in register_map (u16, bitfield, etc.)
+            fault_data = self.decode_fault_bitmap(loader, reg_type, addr, int(raw))
+            result['value'] = fault_data
+            result['unit'] = 'fault_bitmap'
+
         elif data_type == 'bitfield':
-            # Check if this is a fault bitmap
-            if loader.is_fault_address(reg_type, addr):
-                fault_data = self.decode_fault_bitmap(loader, reg_type, addr, int(raw))
-                result['value'] = fault_data
-                result['unit'] = 'fault_bitmap'
-            else:
-                # Unknown bitfield - return raw with bit info
-                result['value'] = {
-                    'raw': raw,
-                    'hex': f"0x{int(raw):04X}",
-                    'active_bits': [b for b in range(16) if (int(raw) >> b) & 1]
-                }
-                result['unit'] = 'bitfield'
+            # bitfield not in fault_bitmap_map — return raw with active bits
+            result['value'] = {
+                'raw': raw,
+                'hex': f"0x{int(raw):04X}",
+                'active_bits': [b for b in range(16) if (int(raw) >> b) & 1]
+            }
+            result['unit'] = 'bitfield'
+
         else:
             result['value'] = decoded
 
