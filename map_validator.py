@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Допустимые значения
 VALID_DATA_TYPES = {'u16', 'u32', 'u32_le', 's16', 's32', 'f32', 'raw', 'char', 'bitfield'}
 VALID_REG_TYPES = {'holding', 'input'}
-VALID_SEVERITIES = {'info', 'warning', 'critical', 'shutdown', 'unknown'}
+VALID_SEVERITIES = {'info', 'warning', 'critical', 'shutdown', 'shutdown_cooldown', 'derate', 'none', 'unknown'}
 
 
 def validate_register_map(filepath: str) -> List[str]:
