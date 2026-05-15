@@ -405,8 +405,10 @@ class MqttClient:
             decoded_registers=decoded_registers
         )
 
-        # Publish decoded data
-        self._publish_decoded(router_sn, server_id, device_type, decoded_registers, date_iso)
+        # Публикуем только успешно декодированные регистры.
+        # Регистры с reason (Неизвестный регистр, ошибка декодирования) уходят только в store.
+        ok_registers = [r for r in decoded_registers if r.get('reason') is None]
+        self._publish_decoded(router_sn, server_id, device_type, ok_registers, date_iso)
 
     def _publish_decoded(self, router_sn: str, bserver_id: int, device_type: str,
                          decoded_registers: list, timestamp: Optional[str]):
