@@ -18,6 +18,131 @@ VALID_REG_TYPES = {'holding', 'input'}
 VALID_SEVERITIES = {'warning', 'shutdown', 'shutdown_cooldown', 'derate', 'none'}
 
 
+def validate_map(filepath: str) -> List[str]:
+    """
+    Validate unified map.jsonl file (новый формат).
+
+    Каждая строка — регистр. Enum-метки в поле labels, fault bitmap — в поле bits.
+    Returns list of error strings. Empty list = valid.
+    """
+    errors = []
+    path = Path(filepath)
+
+    if not path.exists():
+        return [f"Файл не найден: {filepath}"]
+    if path.stat().st_size == 0:
+        return [f"Файл пуст: {filepath}"]
+
+    count = 0
+    seen_addrs = {}
+
+    with open(path, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as e:
+                errors.append(f"Строка {line_num}: невалидный JSON — {e}")
+                continue
+
+            if not isinstance(entry, dict):
+                errors.append(f"Строка {line_num}: ожидается объект, получен {type(entry).__name__}")
+                continue
+
+            # addr — обязательное поле
+            addr = entry.get('addr')
+            if addr is None:
+                errors.append(f"Строка {line_num}: отсутствует обязательное поле 'addr'")
+                continue
+            if not isinstance(addr, (int, float)) or addr != int(addr):
+                errors.append(f"Строка {line_num}: 'addr' должен быть целым числом, получено {addr!r}")
+                continue
+            addr = int(addr)
+
+            reg_type = entry.get('reg_type', 'holding')
+            if reg_type not in VALID_REG_TYPES:
+                errors.append(f"Строка {line_num}: недопустимый reg_type '{reg_type}'")
+
+            # Дубликаты
+            key = (reg_type, addr)
+            if key in seen_addrs:
+                errors.append(f"Строка {line_num}: дубликат {reg_type}:{addr} "
+                               f"(первое вхождение: строка {seen_addrs[key]})")
+            else:
+                seen_addrs[key] = line_num
+
+            # data_type
+            data_type = entry.get('data_type', 'u16')
+            if data_type not in VALID_DATA_TYPES:
+                errors.append(f"Строка {line_num}: недопустимый data_type '{data_type}'")
+
+            # word_len
+            word_len = entry.get('word_len', 1)
+            if not isinstance(word_len, (int, float)) or word_len < 1:
+                errors.append(f"Строка {line_num}: word_len должен быть >= 1, получено {word_len!r}")
+
+            # addr_stride (опционально)
+            addr_stride = entry.get('addr_stride')
+            if addr_stride is not None:
+                if not isinstance(addr_stride, (int, float)) or addr_stride < 1:
+                    errors.append(f"Строка {line_num}: addr_stride должен быть >= 1, получено {addr_stride!r}")
+
+            # multiplier, offset
+            for field in ('multiplier', 'offset'):
+                val = entry.get(field, 0)
+                if not isinstance(val, (int, float)):
+                    errors.append(f"Строка {line_num}: '{field}' должен быть числом, получено {val!r}")
+
+            # na_values
+            na_values = entry.get('na_values', [])
+            if not isinstance(na_values, list):
+                errors.append(f"Строка {line_num}: 'na_values' должен быть массивом")
+
+            unit = entry.get('unit', '')
+
+            # Enum: проверяем labels
+            if unit == 'enum':
+                labels = entry.get('labels')
+                if labels is not None:
+                    if not isinstance(labels, dict):
+                        errors.append(f"Строка {line_num}: 'labels' должен быть объектом")
+                    else:
+                        for val, label in labels.items():
+                            if not isinstance(label, str):
+                                errors.append(f"Строка {line_num}: labels[{val!r}] должен быть строкой")
+
+            # Fault bitmap: проверяем bits
+            if unit == 'fault_bitmap':
+                bits = entry.get('bits')
+                if bits is not None:
+                    if not isinstance(bits, dict):
+                        errors.append(f"Строка {line_num}: 'bits' должен быть объектом")
+                    else:
+                        for bit_str, bit_def in bits.items():
+                            try:
+                                bit_num = int(bit_str)
+                                if bit_num < 0 or bit_num > 15:
+                                    errors.append(f"Строка {line_num}: бит {bit_str} вне диапазона 0-15")
+                            except ValueError:
+                                errors.append(f"Строка {line_num}: ключ бита '{bit_str}' должен быть числом")
+                                continue
+                            if isinstance(bit_def, dict):
+                                severity = bit_def.get('severity')
+                                if severity and severity not in VALID_SEVERITIES:
+                                    errors.append(f"Строка {line_num}: бит {bit_str}: "
+                                                   f"недопустимый severity '{severity}'")
+
+            count += 1
+
+    if count == 0 and not errors:
+        errors.append("Файл не содержит ни одной записи")
+
+    return errors
+
+
 def validate_register_map(filepath: str) -> List[str]:
     """
     Validate register_map.jsonl file.
@@ -237,23 +362,37 @@ def validate_fault_bitmap_map(filepath: str) -> List[str]:
 
 def validate_device_maps(maps_dir: str) -> dict:
     """
-    Validate all map files for a device.
+    Validate map files for a device.
 
-    Returns dict:
-    {
-        'valid': bool,
-        'register_map': {'errors': [...], 'count': N},
-        'enum_map': {'errors': [...], 'count': N},
-        'fault_bitmap_map': {'errors': [...], 'count': N}
-    }
+    Новый формат (map.jsonl):
+        Returns {'valid', 'total_errors', 'map': {'errors', 'count'}}
+
+    Старый формат fallback (register_map.jsonl + enum_map.json + fault_bitmap_map.jsonl):
+        Returns {'valid', 'total_errors', 'register_map', 'enum_map', 'fault_bitmap_map'}
+
+    Всегда добавляет compat-поля register_map/enum_map/fault_bitmap_map для совместимости с UI.
     """
     base = Path(maps_dir)
 
+    # Новый единый формат
+    if (base / 'map.jsonl').exists():
+        map_errors = validate_map(str(base / 'map.jsonl'))
+        count = _count_jsonl_entries(str(base / 'map.jsonl'))
+        return {
+            'valid': len(map_errors) == 0,
+            'total_errors': len(map_errors),
+            'map': {'errors': map_errors, 'count': count},
+            # Compat-поля для UI
+            'register_map': {'errors': map_errors, 'count': count},
+            'enum_map': {'errors': [], 'count': 0},
+            'fault_bitmap_map': {'errors': [], 'count': 0},
+        }
+
+    # Fallback: старый трёхфайловый формат
     reg_errors = validate_register_map(str(base / 'register_map.jsonl'))
     enum_errors = validate_enum_map(str(base / 'enum_map.json'))
     fault_errors = validate_fault_bitmap_map(str(base / 'fault_bitmap_map.jsonl'))
 
-    # Count entries
     reg_count = _count_jsonl_entries(str(base / 'register_map.jsonl'))
     enum_count = _count_json_keys(str(base / 'enum_map.json'))
     fault_count = _count_jsonl_entries(str(base / 'fault_bitmap_map.jsonl'))
@@ -265,7 +404,7 @@ def validate_device_maps(maps_dir: str) -> dict:
         'total_errors': len(all_errors),
         'register_map': {'errors': reg_errors, 'count': reg_count},
         'enum_map': {'errors': enum_errors, 'count': enum_count},
-        'fault_bitmap_map': {'errors': fault_errors, 'count': fault_count}
+        'fault_bitmap_map': {'errors': fault_errors, 'count': fault_count},
     }
 
 

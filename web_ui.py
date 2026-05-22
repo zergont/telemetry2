@@ -741,16 +741,8 @@ DEVICES_TEMPLATE = '''
                     style="padding:6px;width:300px;border:1px solid #ccc;border-radius:4px"></td>
             </tr>
             <tr>
-                <td><strong>register_map.jsonl</strong> <small>(обязательно)</small></td>
-                <td><input type="file" name="register_map" accept=".jsonl" required></td>
-            </tr>
-            <tr>
-                <td><strong>enum_map.json</strong> <small>(опционально)</small></td>
-                <td><input type="file" name="enum_map" accept=".json"></td>
-            </tr>
-            <tr>
-                <td><strong>fault_bitmap_map.jsonl</strong> <small>(опционально)</small></td>
-                <td><input type="file" name="fault_bitmap_map" accept=".jsonl"></td>
+                <td><strong>map.jsonl</strong> <small>(обязательно)</small></td>
+                <td><input type="file" name="map" accept=".jsonl" required></td>
             </tr>
         </table>
         <div style="margin-top:15px">
@@ -766,15 +758,22 @@ DEVICES_TEMPLATE = '''
     <ol style="padding-left:20px;line-height:2">
         <li>Возьмите документацию на устройство (PDF с описанием Modbus-регистров)</li>
         <li>Скопируйте промпт ниже и отправьте его вместе с документацией в любой ИИ (ChatGPT, Claude и т.д.)</li>
-        <li>На выходе получите файлы <code>register_map.jsonl</code>, <code>enum_map.json</code>, <code>fault_bitmap_map.jsonl</code></li>
+        <li>На выходе получите файл <code>map.jsonl</code></li>
         <li>Загрузите файлы через форму выше</li>
     </ol>
     <details style="margin-top:15px">
         <summary style="cursor:pointer;font-weight:600;color:#3498db">📋 Показать промпт для ИИ</summary>
-        <pre id="ai-prompt" style="margin-top:10px;background:#f8f9fa;padding:15px;border-radius:4px;font-size:0.85rem;white-space:pre-wrap;border:1px solid #ddd;max-height:400px;overflow-y:auto">Преобразуй документацию Modbus-регистров в три файла для декодера.
+        <pre id="ai-prompt" style="margin-top:10px;background:#f8f9fa;padding:15px;border-radius:4px;font-size:0.85rem;white-space:pre-wrap;border:1px solid #ddd;max-height:400px;overflow-y:auto">Преобразуй документацию Modbus-регистров в единый файл map.jsonl для декодера.
+Каждая строка — отдельный JSON-объект (один регистр).
 
-ФОРМАТ 1: register_map.jsonl (каждая строка — отдельный JSON-объект)
-{"addr": 40010, "reg_type": "holding", "name": "Engine Speed", "data_type": "u16", "word_len": 1, "multiplier": 1.0, "offset": 0.0, "unit": "rpm", "na_values": [65535], "description": "Обороты двигателя"}
+БАЗОВЫЙ ФОРМАТ (числовой регистр):
+{"addr": 40018, "reg_type": "holding", "name": "GensetL1N Voltage", "data_type": "u16", "word_len": 1, "multiplier": 1.0, "offset": 0.0, "unit": "Vac", "na_values": [65535], "notes_ru": "Напряжение генератора фаза L1-нейтраль"}
+
+ENUM-регистр (добавляется поле labels):
+{"addr": 40010, "reg_type": "holding", "name": "Control Switch Position", "data_type": "u16", "word_len": 1, "multiplier": 1.0, "offset": 0.0, "unit": "enum", "na_values": [65535], "notes_ru": "Положение переключателя режимов", "labels": {"0": "Off", "1": "Auto", "2": "Manual"}}
+
+FAULT BITMAP регистр (добавляется поле bits):
+{"addr": 40400, "reg_type": "holding", "name": "Engine Faults 1", "data_type": "u16", "word_len": 1, "multiplier": 1.0, "offset": 0.0, "unit": "fault_bitmap", "na_values": [], "notes_ru": "Ошибки двигателя 1", "bits": {"0": {"name": "Low Oil Pressure", "severity": "shutdown"}, "1": {"name": "High Coolant Temp", "severity": "warning"}}}
 
 Допустимые data_type:
   u16      — 16-бит беззнаковое, word_len=1
@@ -785,9 +784,7 @@ DEVICES_TEMPLATE = '''
   f32      — IEEE 754 float, word_len=2
   raw, char, bitfield — специальные типы, word_len=1
 
-Допустимые reg_type: holding, input
-Для enum-регистров: unit = "enum"
-word_len: 1 для 16-бит типов, 2 для 32-бит типов (u32, u32_le, s32, f32)
+Для u32 — одна запись на регистр с word_len=2. Hi/Lo Word не разделять.
 
 Поле addr_stride (опционально):
   Используется когда роутер отдаёт уже декодированные 32-бит значения
@@ -796,38 +793,28 @@ word_len: 1 для 16-бит типов, 2 для 32-бит типов (u32, u32
   Адреса в карте — как в документации (шаг 2).
   Пример: {"addr": 30013, "data_type": "u32", "word_len": 1, "addr_stride": 2, ...}
 
-ФОРМАТ 2: enum_map.json (один JSON-объект)
-{
-  "holding:40010": {"0": "Off", "1": "On", "2": "Error"},
-  "holding:40011": {"0": "Stop", "1": "Run"}
-}
-Ключ = "reg_type:addr", значения = {"числовое_значение_строкой": "текстовая_метка"}
-
-ФОРМАТ 3: fault_bitmap_map.jsonl (каждая строка — отдельный JSON-объект)
-{"addr": 40400, "reg_type": "holding", "bit": 0, "name": "Low Oil Pressure", "severity": "warning", "description": "Низкое давление масла"}
-
-bit: от 0 до 15 (позиция бита в 16-битном регистре)
-severity: info, warning, critical, shutdown, unknown
-name — оригинальное название на английском (из документации)
-description — перевод на русский язык
+Допустимые severity для bits: warning, shutdown, shutdown_cooldown, derate, none
 
 Преобразование единиц через multiplier и offset:
   Декодер вычисляет: value = raw * multiplier + offset
   Примеры:
-  - Значение в тысячных (raw=36600 → 36.6):  multiplier=0.001, offset=0.0
-  - Температура °F → °C (raw в °F):           multiplier=0.5556, offset=-17.778, unit="°C"
-  - Температура °F → °C с масштабом /10:      multiplier=0.05556, offset=-17.778, unit="°C"
+  - Значение в тысячных (raw=36600 → 36.6):     multiplier=0.001, offset=0.0
+  - Температура °F → °C (raw в °F):              multiplier=0.5556, offset=-17.778, unit="°C"
+  - Температура °F → °C с масштабом /10:         multiplier=0.05556, offset=-17.778, unit="°C"
   Всегда указывай unit в системе СИ (°C, не °F).
 
-Правила:
-- holding-регистры: addr = 40000 + смещение из документации
-- input-регистры (FC04): addr = 30000 + смещение из документации
-- Если данные приходят через Teltonika RUT (Modbus TCP → MQTT): смещение +1 к адресу
-  (Teltonika нумерует регистры с 1, а не с 0)
-- Поле description — перевод на русский язык
-- Каждая строка JSONL — валидный JSON
-- Кодировка UTF-8
-- Числа без кавычек, строки в кавычках</pre>
+Правила адресации:
+  - holding-регистры: addr = 40000 + смещение из документации
+  - input-регистры (FC04): addr = 30000 + смещение из документации
+  - Если данные через Teltonika RUT (Modbus TCP → MQTT): смещение +1 к адресу
+    (Teltonika нумерует с 1, не с 0)
+
+Правила оформления:
+  - name — оригинальное название на английском (из документации)
+  - notes_ru — перевод названия и описания на русский язык
+  - labels — ключи строкой (числовое значение), значение — строка на языке оригинала
+  - Каждая строка JSONL — валидный JSON, кодировка UTF-8
+  - Числа без кавычек, строки в кавычках</pre>
         <button class="btn" style="margin-top:5px;font-size:0.8rem" onclick="copyPrompt()">📋 Копировать промпт</button>
     </details>
 </div>
@@ -845,16 +832,8 @@ description — перевод на русский язык
             <input type="hidden" name="device_type" id="modal-device-type">
             <table style="width:100%">
                 <tr>
-                    <td style="padding:6px 0"><strong>register_map.jsonl</strong> <small>(обязательно)</small></td>
-                    <td><input type="file" name="register_map" accept=".jsonl" required style="font-size:0.85rem"></td>
-                </tr>
-                <tr>
-                    <td style="padding:6px 0"><strong>enum_map.json</strong> <small>(опционально)</small></td>
-                    <td><input type="file" name="enum_map" accept=".json" style="font-size:0.85rem"></td>
-                </tr>
-                <tr>
-                    <td style="padding:6px 0"><strong>fault_bitmap_map.jsonl</strong> <small>(опционально)</small></td>
-                    <td><input type="file" name="fault_bitmap_map" accept=".jsonl" style="font-size:0.85rem"></td>
+                    <td style="padding:6px 0"><strong>map.jsonl</strong> <small>(обязательно)</small></td>
+                    <td><input type="file" name="map" accept=".jsonl" required style="font-size:0.85rem"></td>
                 </tr>
             </table>
             <div style="margin-top:15px">
@@ -884,18 +863,16 @@ async function validateDevice() {
         if (!resp.ok) { result.innerHTML = '<span style="color:#e74c3c">Ошибка сервера: HTTP ' + resp.status + '</span>'; return; }
         const json = await resp.json();
         if (json.valid) {
-            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ Карты валидны! ' +
-                'Регистры: ' + json.register_map.count +
-                ', Enum: ' + json.enum_map.count +
-                ', Faults: ' + json.fault_bitmap_map.count + '</span>';
+            var cnt = (json.map || json.register_map || {}).count || 0;
+            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ Карты валидны! Регистров: ' + cnt + '</span>';
             btnSave.disabled = false;
             btnSave.style.background = '#27ae60';
             btnSave.style.cursor = 'pointer';
         } else {
             var html = '<span style="color:#e74c3c;font-weight:bold">❌ Найдены ошибки (' + json.total_errors + '):</span><ul>';
-            var allErrors = (json.register_map.errors || [])
-                .concat(json.enum_map.errors || [])
-                .concat(json.fault_bitmap_map.errors || []);
+            var allErrors = ((json.map || json.register_map || {}).errors || [])
+                .concat((json.enum_map || {}).errors || [])
+                .concat((json.fault_bitmap_map || {}).errors || []);
             allErrors.slice(0, 20).forEach(function(e) { html += '<li style="color:#e74c3c;font-size:0.9rem">' + e + '</li>'; });
             if (allErrors.length > 20) html += '<li>...ещё ' + (allErrors.length - 20) + ' ошибок</li>';
             html += '</ul>';
@@ -1076,11 +1053,12 @@ async function validateUpdateMaps() {
         if (!resp.ok) { result.innerHTML = '<span style="color:#e74c3c">Ошибка сервера: HTTP ' + resp.status + '</span>'; return; }
         var json = await resp.json();
         if (json.valid) {
-            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ Валидно! Регистры: ' + json.register_map.count + ', Enum: ' + json.enum_map.count + ', Faults: ' + json.fault_bitmap_map.count + '</span>';
+            var cnt2 = (json.map || json.register_map || {}).count || 0;
+            result.innerHTML = '<span style="color:#27ae60;font-weight:bold">✅ Валидно! Регистров: ' + cnt2 + '</span>';
             btn.disabled = false; btn.style.background = '#27ae60'; btn.style.cursor = 'pointer';
         } else {
             var html = '<span style="color:#e74c3c;font-weight:bold">❌ Ошибки (' + json.total_errors + '):</span><ul>';
-            var allErrors = (json.register_map.errors||[]).concat(json.enum_map.errors||[]).concat(json.fault_bitmap_map.errors||[]);
+            var allErrors = ((json.map||json.register_map||{}).errors||[]).concat((json.enum_map||{}).errors||[]).concat((json.fault_bitmap_map||{}).errors||[]);
             allErrors.slice(0,10).forEach(function(e){ html += '<li style="color:#e74c3c;font-size:0.85rem">' + e + '</li>'; });
             html += '</ul>';
             result.innerHTML = html;
@@ -1243,20 +1221,23 @@ def api_validate_device():
     if not device_type:
         return jsonify({'valid': False, 'error': 'Не указано имя устройства'}), 400
 
-    # Save uploaded files to temp dir for validation
+    # Save uploaded file to temp dir for validation
     tmpdir = tempfile.mkdtemp()
     try:
-        reg_file = request.files.get('register_map')
-        if reg_file and reg_file.filename:
-            reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
-
-        enum_file = request.files.get('enum_map')
-        if enum_file and enum_file.filename:
-            enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
-
-        fault_file = request.files.get('fault_bitmap_map')
-        if fault_file and fault_file.filename:
-            fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
+        map_file = request.files.get('map')
+        if map_file and map_file.filename:
+            map_file.save(os.path.join(tmpdir, 'map.jsonl'))
+        else:
+            # Fallback: старый формат
+            reg_file = request.files.get('register_map')
+            if reg_file and reg_file.filename:
+                reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
+            enum_file = request.files.get('enum_map')
+            if enum_file and enum_file.filename:
+                enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
+            fault_file = request.files.get('fault_bitmap_map')
+            if fault_file and fault_file.filename:
+                fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
 
         result = validate_device_maps(tmpdir)
         return jsonify(result)
@@ -1287,22 +1268,14 @@ def api_add_device():
         maps_dir = os.path.join('maps', device_type)
         os.makedirs(maps_dir, exist_ok=True)
 
-        reg_file = request.files.get('register_map')
-        if not reg_file or not reg_file.filename:
-            return jsonify({'ok': False, 'error': 'register_map.jsonl обязателен'}), 400
+        map_file = request.files.get('map')
+        if not map_file or not map_file.filename:
+            return jsonify({'ok': False, 'error': 'map.jsonl обязателен'}), 400
 
         # Save to temp first, validate, then move
         tmpdir = tempfile.mkdtemp()
         try:
-            reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
-
-            enum_file = request.files.get('enum_map')
-            if enum_file and enum_file.filename:
-                enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
-
-            fault_file = request.files.get('fault_bitmap_map')
-            if fault_file and fault_file.filename:
-                fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
+            map_file.save(os.path.join(tmpdir, 'map.jsonl'))
 
             # Validate
             validation = validate_device_maps(tmpdir)
@@ -1320,11 +1293,12 @@ def api_add_device():
         if not ok:
             return jsonify({'ok': False, 'error': 'Не удалось загрузить карты'}), 500
 
-        # Update MQTT client payload key mapping
+        # Update MQTT client payload key mapping + публикуем метаданные
         mqtt = get_mqtt_client()
         if mqtt:
             new_map = {key: device_type for key in payload_keys}
             mqtt.update_payload_key_map(new_map)
+            mqtt.publish_metadata(device_type)
 
         # Update config.yaml
         _update_config_devices(device_type, maps_dir, payload_keys)
@@ -1470,7 +1444,7 @@ def api_list_map_files(device_type: str):
     if device_type not in get_registered_device_types():
         return jsonify({'ok': False, 'error': 'Не найдено'}), 404
     maps_dir = Path('maps') / device_type
-    known = ['register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json']
+    known = ['map.jsonl', 'register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json']
     files = [f for f in known if (maps_dir / f).exists()]
     return jsonify({'ok': True, 'files': files})
 
@@ -1478,7 +1452,7 @@ def api_list_map_files(device_type: str):
 @app.route('/api/devices/<device_type>/maps/<filename>')
 def api_download_map_file(device_type: str, filename: str):
     """Download a single map file."""
-    allowed = {'register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json'}
+    allowed = {'map.jsonl', 'register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json'}
     if filename not in allowed:
         abort(404)
     if device_type not in get_registered_device_types():
@@ -1499,21 +1473,13 @@ def api_update_device_maps(device_type: str):
         if device_type not in get_registered_device_types():
             return jsonify({'ok': False, 'error': f"Устройство '{device_type}' не найдено"}), 404
 
-        reg_file = request.files.get('register_map')
-        if not reg_file or not reg_file.filename:
-            return jsonify({'ok': False, 'error': 'register_map.jsonl обязателен'}), 400
+        map_file = request.files.get('map')
+        if not map_file or not map_file.filename:
+            return jsonify({'ok': False, 'error': 'map.jsonl обязателен'}), 400
 
         tmpdir = tempfile.mkdtemp()
         try:
-            reg_file.save(os.path.join(tmpdir, 'register_map.jsonl'))
-
-            enum_file = request.files.get('enum_map')
-            if enum_file and enum_file.filename:
-                enum_file.save(os.path.join(tmpdir, 'enum_map.json'))
-
-            fault_file = request.files.get('fault_bitmap_map')
-            if fault_file and fault_file.filename:
-                fault_file.save(os.path.join(tmpdir, 'fault_bitmap_map.jsonl'))
+            map_file.save(os.path.join(tmpdir, 'map.jsonl'))
 
             # Validate before overwriting
             validation = validate_device_maps(tmpdir)
@@ -1532,6 +1498,11 @@ def api_update_device_maps(device_type: str):
         ok = load_device_maps(device_type, maps_dir)
         if not ok:
             return jsonify({'ok': False, 'error': 'Файлы сохранены, но загрузка не удалась'}), 500
+
+        # Публикуем обновлённые метаданные в retained-топик
+        mqtt = get_mqtt_client()
+        if mqtt:
+            mqtt.publish_metadata(device_type)
 
         stats = get_device_stats(device_type)
         logger.info(f"Карты устройства '{device_type}' обновлены: {stats}")

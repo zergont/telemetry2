@@ -19,6 +19,7 @@ import paho.mqtt.client as mqtt
 
 from decoder import get_decoder
 from panel_store import get_store
+from maps_loader import get_loader, get_registered_device_types
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,32 @@ class MqttClient:
             # Subscribe to raw telemetry
             client.subscribe(self.raw_topic_pattern)
             logger.info(f"Подписка на: {self.raw_topic_pattern}")
+
+            # Публикуем метаданные всех загруженных устройств (retained)
+            for device_type in get_registered_device_types():
+                self.publish_metadata(device_type)
         else:
             logger.error(f"Ошибка подключения к MQTT, rc={rc}")
             self._connected = False
+
+    def publish_metadata(self, device_type: str) -> bool:
+        """
+        Публикует объединённые метаданные карты устройства в retained-топик.
+        Топик: cg/v1/maps/<device_type>
+        Потребители подписываются один раз и получают актуальные метаданные.
+        """
+        if not self._connected or not self._client:
+            return False
+        loader = get_loader(device_type)
+        if not loader:
+            return False
+        topic = f"cg/v1/maps/{device_type}"
+        payload = loader.build_metadata_payload(device_type)
+        msg = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+        self._client.publish(topic, msg, retain=True)
+        logger.info(f"Метаданные '{device_type}' опубликованы в {topic} "
+                    f"({len(payload['registers'])} регистров, {len(msg)} байт)")
+        return True
 
     def _on_disconnect(self, client, userdata, rc, properties=None):
         """Callback when disconnected from broker."""

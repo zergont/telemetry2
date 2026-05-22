@@ -35,6 +35,96 @@ class RegisterMapLoader:
         # All fault addresses (for quick lookup)
         self._fault_addresses: set = set()
 
+    def load_map(self, filepath: str) -> int:
+        """
+        Load unified map.jsonl (новый формат).
+        Каждая строка — регистр, может содержать:
+          labels: {...}  — inline enum-метки (unit=enum)
+          bits: {"0": {"name": ..., "severity": ...}}  — fault bitmap (unit=fault_bitmap)
+        """
+        path = Path(filepath)
+        if not path.exists():
+            logger.error(f"Файл карты не найден: {filepath}")
+            return 0
+
+        count = 0
+        with open(path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    reg_type = entry.get('reg_type', 'holding')
+                    addr = entry.get('addr')
+                    if addr is None:
+                        logger.warning(f"Строка {line_num}: отсутствует 'addr', пропущено")
+                        continue
+                    addr = int(addr)
+
+                    # Сохраняем определение регистра
+                    self._register_map[(reg_type, addr)] = entry
+
+                    # Inline enum labels
+                    labels = entry.get('labels')
+                    if labels and isinstance(labels, dict):
+                        self._enum_map[(reg_type, addr)] = labels
+
+                    # Inline fault bits
+                    bits = entry.get('bits')
+                    if bits and isinstance(bits, dict):
+                        self._fault_addresses.add((reg_type, addr))
+                        for bit_str, bit_def in bits.items():
+                            try:
+                                self._fault_bitmap_map[(reg_type, addr, int(bit_str))] = bit_def
+                            except ValueError:
+                                logger.warning(f"Строка {line_num}: некорректный номер бита '{bit_str}'")
+
+                    count += 1
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Ошибка в строке {line_num} файла {filepath}: {e}")
+
+        logger.info(f"Загружено {count} регистров из {filepath}")
+        return count
+
+    def build_metadata_payload(self, device_type: str) -> dict:
+        """
+        Собирает компактный payload метаданных для публикации в MQTT (retain).
+        Содержит только поля нужные потребителям: name, unit, notes_ru, labels, bits.
+        """
+        registers = {}
+        for (reg_type, addr), reg_def in self._register_map.items():
+            entry = {}
+
+            for field in ('name', 'unit', 'notes_ru'):
+                val = reg_def.get(field)
+                if val is not None and val != '':
+                    entry[field] = val
+
+            # Enum labels
+            labels = self._enum_map.get((reg_type, addr))
+            if labels:
+                entry['labels'] = labels
+
+            # Fault bits
+            if (reg_type, addr) in self._fault_addresses:
+                bits = {}
+                for (rt, a, bit), bit_def in self._fault_bitmap_map.items():
+                    if rt == reg_type and a == addr:
+                        bits[str(bit)] = {k: v for k, v in bit_def.items()
+                                          if k in ('name', 'severity')}
+                if bits:
+                    entry['bits'] = bits
+
+            # Ключ: для input-регистров добавляем префикс
+            key = f"input:{addr}" if reg_type == 'input' else str(addr)
+            registers[key] = entry
+
+        return {
+            'device_type': device_type,
+            'registers': registers
+        }
+
     def load_register_map(self, filepath: str) -> int:
         """
         Load register definitions from JSONL file.
@@ -164,25 +254,34 @@ def get_loader(device_type: str = 'pcc') -> Optional[RegisterMapLoader]:
 
 def load_device_maps(device_type: str, maps_dir: str) -> bool:
     """
-    Load all map files for a device type from a directory.
+    Load map files for a device type from a directory.
 
-    Expected files in maps_dir:
+    Новый формат (приоритет):
+        map.jsonl  — единый файл с регистрами, enum и fault bitmap
+
+    Старый формат (fallback для обратной совместимости):
         register_map.jsonl
-        enum_map.json
-        fault_bitmap_map.jsonl
+        enum_map.json          (опционально)
+        fault_bitmap_map.jsonl (опционально)
 
-    Returns True if register map loaded successfully.
+    Returns True if at least one register loaded successfully.
     """
     global _loaders
 
     loader = RegisterMapLoader()
     base = Path(maps_dir)
 
-    reg_count = loader.load_register_map(str(base / 'register_map.jsonl'))
-    loader.load_enum_map(str(base / 'enum_map.json'))
-    loader.load_fault_bitmap_map(str(base / 'fault_bitmap_map.jsonl'))
+    # Новый единый формат
+    if (base / 'map.jsonl').exists():
+        count = loader.load_map(str(base / 'map.jsonl'))
+    else:
+        # Fallback: старый трёхфайловый формат
+        logger.info(f"map.jsonl не найден для '{device_type}', используется старый формат (3 файла)")
+        count = loader.load_register_map(str(base / 'register_map.jsonl'))
+        loader.load_enum_map(str(base / 'enum_map.json'))
+        loader.load_fault_bitmap_map(str(base / 'fault_bitmap_map.jsonl'))
 
-    if reg_count == 0:
+    if count == 0:
         logger.error(f"Ни один регистр не загружен для устройства '{device_type}' из {maps_dir}")
         return False
 
@@ -192,7 +291,7 @@ def load_device_maps(device_type: str, maps_dir: str) -> bool:
     # Load ignore list if exists
     _load_ignore_list(device_type, maps_dir)
 
-    logger.info(f"Карты для устройства '{device_type}' загружены из {maps_dir}")
+    logger.info(f"Карты для устройства '{device_type}' загружены из {maps_dir}: {count} регистров")
     return True
 
 
