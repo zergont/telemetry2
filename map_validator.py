@@ -7,15 +7,22 @@
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import List
 
 logger = logging.getLogger(__name__)
 
 # Допустимые значения
-VALID_DATA_TYPES = {'u16', 'u32', 'u32_le', 's16', 's32', 'f32', 'raw', 'char', 'bitfield'}
+VALID_DATA_TYPES = {'u8', 's8', 'u16', 's16', 'u32', 'u32_le', 's32', 'f32', 'bitfield'}
+# cNNN — строки (c136, c144, c168, и т.д.)
+_CHAR_TYPE_RE = re.compile(r'^c\d+$')
 VALID_REG_TYPES = {'holding', 'input'}
 VALID_SEVERITIES = {'warning', 'shutdown', 'shutdown_cooldown', 'derate', 'none'}
+
+
+def _is_valid_data_type(dt: str) -> bool:
+    return dt in VALID_DATA_TYPES or bool(_CHAR_TYPE_RE.match(dt))
 
 
 def validate_map(filepath: str) -> List[str]:
@@ -76,7 +83,7 @@ def validate_map(filepath: str) -> List[str]:
 
             # data_type
             data_type = entry.get('data_type', 'u16')
-            if data_type not in VALID_DATA_TYPES:
+            if not _is_valid_data_type(data_type):
                 errors.append(f"Строка {line_num}: недопустимый data_type '{data_type}'")
 
             # word_len
@@ -198,9 +205,8 @@ def validate_register_map(filepath: str) -> List[str]:
 
             # data_type
             data_type = entry.get('data_type', 'u16')
-            if data_type not in VALID_DATA_TYPES:
-                errors.append(f"Строка {line_num}: недопустимый data_type '{data_type}', "
-                              f"допустимые: {', '.join(sorted(VALID_DATA_TYPES))}")
+            if not _is_valid_data_type(data_type):
+                errors.append(f"Строка {line_num}: недопустимый data_type '{data_type}'")
 
             # word_len
             word_len = entry.get('word_len', 1)
