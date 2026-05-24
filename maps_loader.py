@@ -14,6 +14,75 @@ from typing import Dict, Optional, Tuple, List
 
 logger = logging.getLogger(__name__)
 
+# ================================================================
+# Label translations (EN → RU), общий для всех device_type
+# ================================================================
+_TRANSLATIONS_FILE = Path("devices/label_translations.json")
+_label_translations: Dict[str, str] = {}
+_translations_lock = threading.Lock()
+
+
+def load_label_translations(filepath: Optional[str] = None) -> int:
+    """Загрузить словарь переводов enum-меток из JSON-файла.
+    Возвращает количество загруженных переводов."""
+    global _label_translations
+    path = Path(filepath) if filepath else _TRANSLATIONS_FILE
+    if not path.exists():
+        logger.warning(f"Файл переводов не найден: {path}")
+        return 0
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        # Фильтруем служебный ключ _comment
+        translations = {k: v for k, v in data.items() if not k.startswith('_')}
+        with _translations_lock:
+            _label_translations = translations
+        logger.info(f"Загружено {len(translations)} переводов меток из {path}")
+        return len(translations)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки переводов: {e}")
+        return 0
+
+
+def get_label_translations() -> Dict[str, str]:
+    """Получить копию словаря переводов."""
+    with _translations_lock:
+        return dict(_label_translations)
+
+
+def save_label_translations(translations: Dict[str, str],
+                             filepath: Optional[str] = None) -> str:
+    """Сохранить словарь переводов в файл.
+    Возвращает пустую строку при успехе или сообщение об ошибке."""
+    global _label_translations
+    path = Path(filepath) if filepath else _TRANSLATIONS_FILE
+    try:
+        # Читаем текущий файл чтобы сохранить _comment
+        existing = {}
+        if path.exists():
+            with open(path, encoding='utf-8') as f:
+                existing = json.load(f)
+        comment = existing.get('_comment', '')
+
+        out: Dict[str, str] = {}
+        if comment:
+            out['_comment'] = comment
+        # Сортируем по ключу для читаемости
+        out.update(sorted(translations.items()))
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+
+        with _translations_lock:
+            _label_translations = dict(translations)
+        logger.info(f"Словарь переводов сохранён: {len(translations)} записей → {path}")
+        return ""
+    except Exception as e:
+        err = f"Ошибка сохранения переводов: {e}"
+        logger.error(err)
+        return err
+
 
 class RegisterMapLoader:
     """
@@ -101,10 +170,16 @@ class RegisterMapLoader:
                 if val is not None and val != '':
                     entry[field] = val
 
-            # Enum labels
+            # Enum labels + перевод
             labels = self._enum_map.get((reg_type, addr))
             if labels:
                 entry['labels'] = labels
+                # Добавляем labels_ru если есть хотя бы один перевод
+                with _translations_lock:
+                    tr = _label_translations
+                labels_ru = {k: tr[v] for k, v in labels.items() if v in tr}
+                if labels_ru:
+                    entry['labels_ru'] = labels_ru
 
             # Fault bits
             if (reg_type, addr) in self._fault_addresses:
@@ -290,6 +365,10 @@ def load_device_maps(device_type: str, maps_dir: str) -> bool:
 
     # Load ignore list if exists
     _load_ignore_list(device_type, maps_dir)
+
+    # Загружаем переводы меток (один раз, при первом устройстве)
+    if not _label_translations:
+        load_label_translations()
 
     logger.info(f"Карты для устройства '{device_type}' загружены из {maps_dir}: {count} регистров")
     return True

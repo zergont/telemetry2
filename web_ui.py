@@ -15,7 +15,8 @@ from flask import Flask, render_template_string, jsonify, abort, request, send_f
 from panel_store import get_store, PanelStatus
 from mqtt_client import get_mqtt_client
 from maps_loader import (get_registered_device_types, get_device_stats, load_device_maps, remove_device,
-                         add_to_ignore, remove_from_ignore, get_all_ignore_lists, clear_ignore_list)
+                         add_to_ignore, remove_from_ignore, get_all_ignore_lists, clear_ignore_list,
+                         get_label_translations, save_label_translations)
 from map_validator import validate_device_maps
 from version import __version__
 
@@ -1603,6 +1604,196 @@ def _update_config_devices(device_type: str, maps_dir: str, payload_keys: list):
         logger.info(f"config.yaml обновлён: добавлено устройство '{device_type}'")
     except Exception as e:
         logger.error(f"Ошибка обновления config.yaml: {e}")
+
+
+# ============================================================
+# Translations page
+# ============================================================
+
+TRANSLATIONS_TEMPLATE = '''
+<div class="card">
+  <h2>Переводы enum-меток <span id="stats" style="font-size:.85rem;font-weight:normal;color:#666"></span></h2>
+  <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    <input id="search" type="text" placeholder="Поиск по EN или RU..." autocomplete="off"
+           style="flex:1;min-width:200px;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:.9rem">
+    <label style="display:flex;align-items:center;gap:6px;font-size:.9rem;cursor:pointer">
+      <input type="checkbox" id="onlyEmpty"> Только без перевода
+    </label>
+    <button id="saveBtn" onclick="saveAll()"
+            style="padding:7px 18px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:.9rem">
+      Сохранить все
+    </button>
+    <span id="saveStatus" style="font-size:.85rem;color:#666"></span>
+  </div>
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th style="width:40%">Оригинал (EN)</th>
+        <th style="width:40%">Перевод (RU)</th>
+        <th style="width:20%;text-align:center">Статус</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <p id="noResults" style="display:none;color:#999;padding:20px;text-align:center">Ничего не найдено</p>
+</div>
+
+<script>
+const ALL_DATA = {{ translations_json }};
+let data = Object.entries(ALL_DATA).map(([en, ru]) => ({en, ru}));
+data.sort((a,b) => a.en.localeCompare(b.en));
+
+const tbody   = document.getElementById('tbody');
+const search  = document.getElementById('search');
+const onlyEmp = document.getElementById('onlyEmpty');
+const stats   = document.getElementById('stats');
+const noRes   = document.getElementById('noResults');
+
+function render() {
+  const q = search.value.toLowerCase();
+  const onlyE = onlyEmp.checked;
+  let shown = 0;
+  tbody.innerHTML = '';
+  data.forEach(item => {
+    const matchQ = !q || item.en.toLowerCase().includes(q) || item.ru.toLowerCase().includes(q);
+    const matchE = !onlyE || !item.ru;
+    if (!matchQ || !matchE) return;
+    shown++;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="font-family:monospace;font-size:.9rem">${escHtml(item.en)}</td>
+      <td><input type="text" value="${escHtml(item.ru)}" data-en="${escHtml(item.en)}"
+                 style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:.9rem"
+                 onchange="onChange(this)" oninput="markDirty(this)"></td>
+      <td style="text-align:center" id="st_${btoa(item.en).replace(/=/g,'')}">${item.ru ? '✓' : '<span style=color:#e74c3c>—</span>'}</td>`;
+    tbody.appendChild(tr);
+  });
+  noRes.style.display = shown ? 'none' : 'block';
+  updateStats();
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function updateStats() {
+  const total   = data.length;
+  const filled  = data.filter(d => d.ru).length;
+  const missing = total - filled;
+  stats.textContent = `(${filled}/${total} переведено${missing ? ', ' + missing + ' без перевода' : ''})`;
+}
+
+function markDirty(input) {
+  document.getElementById('saveBtn').style.background = '#e67e22';
+}
+
+function onChange(input) {
+  const en = input.dataset.en;
+  const ru = input.value.trim();
+  const item = data.find(d => d.en === en);
+  if (item) item.ru = ru;
+  const key = btoa(en).replace(/=/g,'');
+  const cell = document.getElementById('st_' + key);
+  if (cell) cell.innerHTML = ru ? '✓' : '<span style=color:#e74c3c>—</span>';
+  updateStats();
+  document.getElementById('saveBtn').style.background = '#e67e22';
+}
+
+function saveAll() {
+  const payload = {};
+  data.forEach(d => { payload[d.en] = d.ru; });
+  const saveStatus = document.getElementById('saveStatus');
+  const saveBtn    = document.getElementById('saveBtn');
+  saveStatus.textContent = 'Сохранение...';
+  fetch('/api/translations', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.json())
+  .then(resp => {
+    if (resp.ok) {
+      saveStatus.textContent = '✓ Сохранено';
+      saveBtn.style.background = '#27ae60';
+    } else {
+      saveStatus.textContent = '✗ Ошибка: ' + (resp.error || '?');
+    }
+    setTimeout(() => saveStatus.textContent = '', 3000);
+  })
+  .catch(e => { saveStatus.textContent = '✗ ' + e; });
+}
+
+search.addEventListener('input', render);
+onlyEmp.addEventListener('change', render);
+render();
+</script>
+'''
+
+
+@app.route('/translations')
+def translations_page():
+    """Страница редактирования переводов enum-меток."""
+    import json as _json
+    translations = get_label_translations()
+    tr_json = _json.dumps(translations, ensure_ascii=False)
+    content = TRANSLATIONS_TEMPLATE.replace('{{ translations_json }}', tr_json)
+    return wrap_content('Переводы меток', content, auto_reload=False)
+
+
+@app.route('/api/translations')
+def api_get_translations():
+    """GET /api/translations — получить весь словарь переводов."""
+    return jsonify(get_label_translations())
+
+
+@app.route('/api/translations', methods=['PUT'])
+def api_save_translations():
+    """PUT /api/translations — сохранить весь словарь целиком.
+    Body: {"EN label": "RU label", ...}
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'ok': False, 'error': 'Ожидается JSON-объект'}), 400
+
+    # Отфильтровываем не-строковые значения
+    cleaned = {str(k): str(v) for k, v in data.items()
+               if isinstance(k, str) and isinstance(v, str)}
+
+    err = save_label_translations(cleaned)
+    if err:
+        return jsonify({'ok': False, 'error': err}), 500
+
+    # Переиздаём метаданные в MQTT (все устройства), чтобы labels_ru обновились
+    mqtt = get_mqtt_client()
+    if mqtt and mqtt.is_connected():
+        for dt in get_registered_device_types():
+            mqtt.publish_metadata(dt)
+        logger.info("MQTT metadata republished after translations update")
+
+    return jsonify({'ok': True, 'count': len(cleaned)})
+
+
+@app.route('/api/translations/<path:label>', methods=['PUT'])
+def api_update_one_translation(label: str):
+    """PUT /api/translations/<label> — обновить один перевод.
+    Body: {"ru": "Русский текст"}
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'ru' not in data:
+        return jsonify({'ok': False, 'error': 'Ожидается {"ru": "..."}'}), 400
+
+    translations = get_label_translations()
+    translations[label] = str(data['ru'])
+    err = save_label_translations(translations)
+    if err:
+        return jsonify({'ok': False, 'error': err}), 500
+
+    mqtt = get_mqtt_client()
+    if mqtt and mqtt.is_connected():
+        for dt in get_registered_device_types():
+            mqtt.publish_metadata(dt)
+
+    return jsonify({'ok': True, 'label': label, 'ru': data['ru']})
 
 
 def run_web_ui(host: str = '0.0.0.0', port: int = 8080, debug: bool = False):
