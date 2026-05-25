@@ -16,7 +16,8 @@ from panel_store import get_store, PanelStatus
 from mqtt_client import get_mqtt_client
 from maps_loader import (get_registered_device_types, get_device_stats, load_device_maps, remove_device,
                          add_to_ignore, remove_from_ignore, get_all_ignore_lists, clear_ignore_list,
-                         get_label_translations, save_label_translations)
+                         get_label_translations, save_label_translations,
+                         get_bit_translations, save_bit_translations)
 from map_validator import validate_device_maps
 from version import __version__
 
@@ -155,6 +156,7 @@ def wrap_content(title: str, content: str, auto_reload: bool = True) -> str:
             <h1>
                 <a href="/" style="color:white;text-decoration:none">🔌 Modbus-декодер</a>
                 <a href="/devices" style="font-size:0.85rem;margin-left:20px">⚙️ Устройства</a>
+                <a href="/translations" style="font-size:0.85rem;margin-left:20px">🌐 Переводы</a>
                 <span style="font-size:0.7rem;opacity:0.6;margin-left:15px">v{__version__}</span>
             </h1>
         </div>
@@ -1612,7 +1614,21 @@ def _update_config_devices(device_type: str, maps_dir: str, payload_keys: list):
 
 TRANSLATIONS_TEMPLATE = '''
 <div class="card">
-  <h2>Переводы enum-меток <span id="stats" style="font-size:.85rem;font-weight:normal;color:#666"></span></h2>
+  <!-- Вкладки -->
+  <div style="display:flex;gap:4px;margin-bottom:20px;border-bottom:2px solid #3498db">
+    <button id="tab-labels" onclick="switchTab('labels')"
+        style="padding:9px 20px;border:none;background:#3498db;color:white;cursor:pointer;border-radius:4px 4px 0 0;font-size:.9rem;font-weight:600">
+      🏷️ Метки enum
+      <span id="badge-labels" style="font-size:.8rem;opacity:.85;margin-left:4px"></span>
+    </button>
+    <button id="tab-bits" onclick="switchTab('bits')"
+        style="padding:9px 20px;border:none;background:#ecf0f1;color:#555;cursor:pointer;border-radius:4px 4px 0 0;font-size:.9rem;font-weight:400">
+      🔴 Биты ошибок
+      <span id="badge-bits" style="font-size:.8rem;opacity:.85;margin-left:4px"></span>
+    </button>
+  </div>
+
+  <!-- Панель управления -->
   <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
     <input id="search" type="text" placeholder="Поиск по EN или RU..." autocomplete="off"
            style="flex:1;min-width:200px;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:.9rem">
@@ -1621,16 +1637,17 @@ TRANSLATIONS_TEMPLATE = '''
     </label>
     <button id="saveBtn" onclick="saveAll()"
             style="padding:7px 18px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:.9rem">
-      Сохранить все
+      💾 Сохранить все
     </button>
     <span id="saveStatus" style="font-size:.85rem;color:#666"></span>
   </div>
-  <table id="tbl">
+
+  <table>
     <thead>
       <tr>
-        <th style="width:40%">Оригинал (EN)</th>
+        <th style="width:42%">Оригинал (EN)</th>
         <th style="width:40%">Перевод (RU)</th>
-        <th style="width:20%;text-align:center">Статус</th>
+        <th style="width:18%;text-align:center">Статус</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -1639,105 +1656,146 @@ TRANSLATIONS_TEMPLATE = '''
 </div>
 
 <script>
-const ALL_DATA = {{ translations_json }};
-let data = Object.entries(ALL_DATA).map(([en, ru]) => ({en, ru}));
-data.sort((a,b) => a.en.localeCompare(b.en));
+const LABELS_DATA = {{ labels_json }};
+const BITS_DATA   = {{ bits_json }};
 
-const tbody   = document.getElementById('tbody');
-const search  = document.getElementById('search');
-const onlyEmp = document.getElementById('onlyEmpty');
-const stats   = document.getElementById('stats');
-const noRes   = document.getElementById('noResults');
+let labelsArr = Object.entries(LABELS_DATA).map(([en,ru]) => ({en, ru}));
+let bitsArr   = Object.entries(BITS_DATA  ).map(([en,ru]) => ({en, ru}));
+labelsArr.sort((a,b) => a.en.localeCompare(b.en));
+bitsArr.sort((a,b)   => a.en.localeCompare(b.en));
 
-function render() {
-  const q = search.value.toLowerCase();
-  const onlyE = onlyEmp.checked;
-  let shown = 0;
-  tbody.innerHTML = '';
-  data.forEach(item => {
-    const matchQ = !q || item.en.toLowerCase().includes(q) || item.ru.toLowerCase().includes(q);
-    const matchE = !onlyE || !item.ru;
-    if (!matchQ || !matchE) return;
-    shown++;
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td style="font-family:monospace;font-size:.9rem">${escHtml(item.en)}</td>
-      <td><input type="text" value="${escHtml(item.ru)}" data-en="${escHtml(item.en)}"
-                 style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:.9rem"
-                 onchange="onChange(this)" oninput="markDirty(this)"></td>
-      <td style="text-align:center" id="st_${btoa(item.en).replace(/=/g,'')}">${item.ru ? '✓' : '<span style=color:#e74c3c>—</span>'}</td>`;
-    tbody.appendChild(tr);
-  });
-  noRes.style.display = shown ? 'none' : 'block';
-  updateStats();
+let currentTab = 'labels';
+
+function getArr() { return currentTab === 'labels' ? labelsArr : bitsArr; }
+
+function switchTab(tab) {
+  currentTab = tab;
+  var isLab = tab === 'labels';
+  var tl = document.getElementById('tab-labels');
+  var tb = document.getElementById('tab-bits');
+  tl.style.background   = isLab  ? '#3498db' : '#ecf0f1';
+  tl.style.color        = isLab  ? 'white'   : '#555';
+  tl.style.fontWeight   = isLab  ? '600'     : '400';
+  tb.style.background   = !isLab ? '#3498db' : '#ecf0f1';
+  tb.style.color        = !isLab ? 'white'   : '#555';
+  tb.style.fontWeight   = !isLab ? '600'     : '400';
+  document.getElementById('search').value = '';
+  document.getElementById('onlyEmpty').checked = false;
+  render();
 }
+
+const tbody = document.getElementById('tbody');
+const noRes = document.getElementById('noResults');
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function updateStats() {
-  const total   = data.length;
-  const filled  = data.filter(d => d.ru).length;
-  const missing = total - filled;
-  stats.textContent = `(${filled}/${total} переведено${missing ? ', ' + missing + ' без перевода' : ''})`;
+function tabKey(s) {
+  try { return btoa(unescape(encodeURIComponent(s))).replace(/[^a-zA-Z0-9]/g,'_'); }
+  catch(e) { return Math.abs(s.split('').reduce((a,c)=>a+c.charCodeAt(0),0)).toString(); }
 }
 
-function markDirty(input) {
+function render() {
+  var q     = document.getElementById('search').value.toLowerCase();
+  var onlyE = document.getElementById('onlyEmpty').checked;
+  var arr   = getArr();
+  var shown = 0;
+  tbody.innerHTML = '';
+  arr.forEach(function(item) {
+    var matchQ = !q || item.en.toLowerCase().includes(q) || item.ru.toLowerCase().includes(q);
+    var matchE = !onlyE || !item.ru;
+    if (!matchQ || !matchE) return;
+    shown++;
+    var tr = document.createElement('tr');
+    var key = tabKey(item.en);
+    tr.innerHTML =
+      '<td style="font-family:monospace;font-size:.85rem;word-break:break-word">' + escHtml(item.en) + '</td>' +
+      '<td><input type="text" value="' + escHtml(item.ru) + '" data-en="' + escHtml(item.en) + '"' +
+      ' style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:.9rem"' +
+      ' onchange="onChange(this)" oninput="markDirty()"></td>' +
+      '<td style="text-align:center" id="st_' + key + '">' +
+        (item.ru ? '✓' : '<span style="color:#e74c3c">—</span>') + '</td>';
+    tbody.appendChild(tr);
+  });
+  noRes.style.display = shown ? 'none' : 'block';
+  updateBadges();
+}
+
+function updateBadges() {
+  ['labels','bits'].forEach(function(tab) {
+    var arr    = tab === 'labels' ? labelsArr : bitsArr;
+    var filled = arr.filter(function(d){ return d.ru; }).length;
+    var total  = arr.length;
+    var miss   = total - filled;
+    document.getElementById('badge-' + tab).textContent =
+      '(' + filled + '/' + total + (miss ? ' ⚠️' + miss : '') + ')';
+  });
+}
+
+function markDirty() {
   document.getElementById('saveBtn').style.background = '#e67e22';
 }
 
 function onChange(input) {
-  const en = input.dataset.en;
-  const ru = input.value.trim();
-  const item = data.find(d => d.en === en);
+  var en   = input.dataset.en;
+  var ru   = input.value.trim();
+  var arr  = getArr();
+  var item = arr.find(function(d){ return d.en === en; });
   if (item) item.ru = ru;
-  const key = btoa(en).replace(/=/g,'');
-  const cell = document.getElementById('st_' + key);
-  if (cell) cell.innerHTML = ru ? '✓' : '<span style=color:#e74c3c>—</span>';
-  updateStats();
-  document.getElementById('saveBtn').style.background = '#e67e22';
+  var cell = document.getElementById('st_' + tabKey(en));
+  if (cell) cell.innerHTML = ru ? '✓' : '<span style="color:#e74c3c">—</span>';
+  updateBadges();
+  markDirty();
 }
 
-function saveAll() {
-  const payload = {};
-  data.forEach(d => { payload[d.en] = d.ru; });
-  const saveStatus = document.getElementById('saveStatus');
-  const saveBtn    = document.getElementById('saveBtn');
+async function saveAll() {
+  var labelsPayload = {};
+  labelsArr.forEach(function(d){ labelsPayload[d.en] = d.ru; });
+  var bitsPayload = {};
+  bitsArr.forEach(function(d){ bitsPayload[d.en] = d.ru; });
+
+  var saveStatus = document.getElementById('saveStatus');
+  var saveBtn    = document.getElementById('saveBtn');
   saveStatus.textContent = 'Сохранение...';
-  fetch('/api/translations', {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload)
-  })
-  .then(r => r.json())
-  .then(resp => {
-    if (resp.ok) {
+
+  try {
+    var results = await Promise.all([
+      fetch('/api/translations',     {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(labelsPayload)}),
+      fetch('/api/bit-translations', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(bitsPayload)})
+    ]);
+    var j1 = await results[0].json();
+    var j2 = await results[1].json();
+    if (j1.ok && j2.ok) {
       saveStatus.textContent = '✓ Сохранено';
       saveBtn.style.background = '#27ae60';
     } else {
-      saveStatus.textContent = '✗ Ошибка: ' + (resp.error || '?');
+      saveStatus.textContent = '✗ Ошибка: ' + (!j1.ok ? j1.error : j2.error);
     }
-    setTimeout(() => saveStatus.textContent = '', 3000);
-  })
-  .catch(e => { saveStatus.textContent = '✗ ' + e; });
+  } catch(e) {
+    saveStatus.textContent = '✗ ' + e;
+  }
+  setTimeout(function(){ saveStatus.textContent = ''; }, 3000);
 }
 
-search.addEventListener('input', render);
-onlyEmp.addEventListener('change', render);
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('onlyEmpty').addEventListener('change', render);
 render();
+updateBadges();
 </script>
 '''
 
 
 @app.route('/translations')
 def translations_page():
-    """Страница редактирования переводов enum-меток."""
+    """Страница редактирования переводов enum-меток и имён битов."""
     import json as _json
-    translations = get_label_translations()
-    tr_json = _json.dumps(translations, ensure_ascii=False)
-    content = TRANSLATIONS_TEMPLATE.replace('{{ translations_json }}', tr_json)
-    return wrap_content('Переводы меток', content, auto_reload=False)
+    labels_json = _json.dumps(get_label_translations(), ensure_ascii=False)
+    bits_json   = _json.dumps(get_bit_translations(),   ensure_ascii=False)
+    content = (TRANSLATIONS_TEMPLATE
+               .replace('{{ labels_json }}', labels_json)
+               .replace('{{ bits_json }}',   bits_json))
+    return wrap_content('Переводы', content, auto_reload=False)
 
 
 @app.route('/api/translations')
@@ -1794,6 +1852,65 @@ def api_update_one_translation(label: str):
             mqtt.publish_metadata(dt)
 
     return jsonify({'ok': True, 'label': label, 'ru': data['ru']})
+
+
+# ============================================================
+# Bit-translations API
+# ============================================================
+
+@app.route('/api/bit-translations')
+def api_get_bit_translations():
+    """GET /api/bit-translations — получить словарь переводов имён битов."""
+    return jsonify(get_bit_translations())
+
+
+@app.route('/api/bit-translations', methods=['PUT'])
+def api_save_bit_translations():
+    """PUT /api/bit-translations — сохранить весь словарь целиком.
+    Body: {"EN bit name": "RU bit name", ...}
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'ok': False, 'error': 'Ожидается JSON-объект'}), 400
+
+    cleaned = {str(k): str(v) for k, v in data.items()
+               if isinstance(k, str) and isinstance(v, str)}
+
+    err = save_bit_translations(cleaned)
+    if err:
+        return jsonify({'ok': False, 'error': err}), 500
+
+    # Переиздаём метаданные в MQTT, чтобы name_ru обновились
+    mqtt = get_mqtt_client()
+    if mqtt and mqtt.is_connected():
+        for dt in get_registered_device_types():
+            mqtt.publish_metadata(dt)
+        logger.info("MQTT metadata republished after bit-translations update")
+
+    return jsonify({'ok': True, 'count': len(cleaned)})
+
+
+@app.route('/api/bit-translations/<path:name>', methods=['PUT'])
+def api_update_one_bit_translation(name: str):
+    """PUT /api/bit-translations/<name> — обновить один перевод имени бита.
+    Body: {"ru": "Русский текст"}
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'ru' not in data:
+        return jsonify({'ok': False, 'error': 'Ожидается {"ru": "..."}'}), 400
+
+    translations = get_bit_translations()
+    translations[name] = str(data['ru'])
+    err = save_bit_translations(translations)
+    if err:
+        return jsonify({'ok': False, 'error': err}), 500
+
+    mqtt = get_mqtt_client()
+    if mqtt and mqtt.is_connected():
+        for dt in get_registered_device_types():
+            mqtt.publish_metadata(dt)
+
+    return jsonify({'ok': True, 'name': name, 'ru': data['ru']})
 
 
 def run_web_ui(host: str = '0.0.0.0', port: int = 8080, debug: bool = False):

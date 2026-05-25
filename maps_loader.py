@@ -84,6 +84,73 @@ def save_label_translations(translations: Dict[str, str],
         return err
 
 
+# ================================================================
+# Bit name translations (EN → RU), общий для всех device_type
+# ================================================================
+_BIT_TRANSLATIONS_FILE = Path("devices/bit_translations.json")
+_bit_translations: Dict[str, str] = {}
+_bit_translations_lock = threading.Lock()
+
+
+def load_bit_translations(filepath: Optional[str] = None) -> int:
+    """Загрузить словарь переводов имён битов из JSON-файла.
+    Возвращает количество загруженных переводов."""
+    global _bit_translations
+    path = Path(filepath) if filepath else _BIT_TRANSLATIONS_FILE
+    if not path.exists():
+        logger.warning(f"Файл переводов битов не найден: {path}")
+        return 0
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        translations = {k: v for k, v in data.items() if not k.startswith('_')}
+        with _bit_translations_lock:
+            _bit_translations = translations
+        logger.info(f"Загружено {len(translations)} переводов имён битов из {path}")
+        return len(translations)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки переводов битов: {e}")
+        return 0
+
+
+def get_bit_translations() -> Dict[str, str]:
+    """Получить копию словаря переводов имён битов."""
+    with _bit_translations_lock:
+        return dict(_bit_translations)
+
+
+def save_bit_translations(translations: Dict[str, str],
+                          filepath: Optional[str] = None) -> str:
+    """Сохранить словарь переводов битов в файл.
+    Возвращает пустую строку при успехе или сообщение об ошибке."""
+    global _bit_translations
+    path = Path(filepath) if filepath else _BIT_TRANSLATIONS_FILE
+    try:
+        existing = {}
+        if path.exists():
+            with open(path, encoding='utf-8') as f:
+                existing = json.load(f)
+        comment = existing.get('_comment', '')
+
+        out: Dict[str, str] = {}
+        if comment:
+            out['_comment'] = comment
+        out.update(sorted(translations.items()))
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+
+        with _bit_translations_lock:
+            _bit_translations = dict(translations)
+        logger.info(f"Словарь переводов битов сохранён: {len(translations)} записей → {path}")
+        return ""
+    except Exception as e:
+        err = f"Ошибка сохранения переводов битов: {e}"
+        logger.error(err)
+        return err
+
+
 class RegisterMapLoader:
     """
     Loads register definitions from external JSONL/JSON files.
@@ -184,10 +251,16 @@ class RegisterMapLoader:
             # Fault bits
             if (reg_type, addr) in self._fault_addresses:
                 bits = {}
+                with _bit_translations_lock:
+                    bt = _bit_translations
                 for (rt, a, bit), bit_def in self._fault_bitmap_map.items():
                     if rt == reg_type and a == addr:
-                        bits[str(bit)] = {k: v for k, v in bit_def.items()
-                                          if k in ('name', 'severity')}
+                        bd: Dict[str, str] = {k: v for k, v in bit_def.items()
+                                              if k in ('name', 'severity')}
+                        name = bd.get('name', '')
+                        if name and name in bt:
+                            bd['name_ru'] = bt[name]
+                        bits[str(bit)] = bd
                 if bits:
                     entry['bits'] = bits
 
@@ -366,9 +439,11 @@ def load_device_maps(device_type: str, maps_dir: str) -> bool:
     # Load ignore list if exists
     _load_ignore_list(device_type, maps_dir)
 
-    # Загружаем переводы меток (один раз, при первом устройстве)
+    # Загружаем переводы меток и битов (один раз, при первом устройстве)
     if not _label_translations:
         load_label_translations()
+    if not _bit_translations:
+        load_bit_translations()
 
     logger.info(f"Карты для устройства '{device_type}' загружены из {maps_dir}: {count} регистров")
     return True
