@@ -109,3 +109,6 @@ Thumbs.db
 # User data — managed via web UI, not tracked in git
 # Example maps are stored in maps.example/
 maps/
+
+# Runtime files in devices/ — writable by app, not tracked
+devices/*/ignore_registers.json
