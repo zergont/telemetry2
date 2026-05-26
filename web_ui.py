@@ -17,7 +17,8 @@ from mqtt_client import get_mqtt_client
 from maps_loader import (get_registered_device_types, get_device_stats, load_device_maps, remove_device,
                          add_to_ignore, remove_from_ignore, get_all_ignore_lists, clear_ignore_list,
                          get_label_translations, save_label_translations,
-                         get_bit_translations, save_bit_translations)
+                         get_bit_translations, save_bit_translations,
+                         get_map_editor_data, save_notes_ru)
 from map_validator import validate_device_maps
 from version import __version__
 
@@ -157,6 +158,7 @@ def wrap_content(title: str, content: str, auto_reload: bool = True) -> str:
                 <a href="/" style="color:white;text-decoration:none">🔌 Modbus-декодер</a>
                 <a href="/devices" style="font-size:0.85rem;margin-left:20px">⚙️ Устройства</a>
                 <a href="/translations" style="font-size:0.85rem;margin-left:20px">🌐 Переводы</a>
+                <a href="/map-editor" style="font-size:0.85rem;margin-left:20px">📋 Карта</a>
                 <span style="font-size:0.7rem;opacity:0.6;margin-left:15px">v{__version__}</span>
             </h1>
         </div>
@@ -1911,6 +1913,395 @@ def api_update_one_bit_translation(name: str):
             mqtt.publish_metadata(dt)
 
     return jsonify({'ok': True, 'name': name, 'ru': data['ru']})
+
+
+# ============================================================
+# Map Editor page
+# ============================================================
+
+MAP_EDITOR_TEMPLATE = '''
+<div class="card">
+  <!-- Выбор устройства -->
+  <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <strong>Устройство:</strong>
+    {% for dt in device_types %}
+    <a href="/map-editor?device={{ dt }}"
+       style="padding:5px 14px;border-radius:4px;text-decoration:none;font-size:.9rem;
+              {% if dt == current_device %}background:#3498db;color:white{% else %}background:#ecf0f1;color:#555{% endif %}">
+      {{ dt|upper }}
+    </a>
+    {% endfor %}
+  </div>
+
+  <!-- Вкладки -->
+  <div style="display:flex;gap:4px;margin-bottom:20px;border-bottom:2px solid #3498db">
+    <button id="tab-notes" onclick="switchTab('notes')"
+        style="padding:9px 20px;border:none;background:#3498db;color:white;cursor:pointer;border-radius:4px 4px 0 0;font-size:.9rem;font-weight:600">
+      📝 Описания <span id="badge-notes" style="font-size:.8rem;opacity:.85;margin-left:4px"></span>
+    </button>
+    <button id="tab-labels" onclick="switchTab('labels')"
+        style="padding:9px 20px;border:none;background:#ecf0f1;color:#555;cursor:pointer;border-radius:4px 4px 0 0;font-size:.9rem">
+      🏷️ Метки <span id="badge-labels" style="font-size:.8rem;opacity:.85;margin-left:4px"></span>
+    </button>
+    <button id="tab-bits" onclick="switchTab('bits')"
+        style="padding:9px 20px;border:none;background:#ecf0f1;color:#555;cursor:pointer;border-radius:4px 4px 0 0;font-size:.9rem">
+      🔴 Биты <span id="badge-bits" style="font-size:.8rem;opacity:.85;margin-left:4px"></span>
+    </button>
+  </div>
+
+  <!-- Панель управления -->
+  <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+    <input id="search" type="text" placeholder="Поиск..." autocomplete="off"
+           style="flex:1;min-width:200px;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:.9rem">
+    <label style="display:flex;align-items:center;gap:6px;font-size:.9rem;cursor:pointer">
+      <input type="checkbox" id="onlyEmpty"> Только без перевода
+    </label>
+    <button id="saveBtn" onclick="saveAll()"
+            style="padding:7px 18px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:.9rem">
+      💾 Сохранить все
+    </button>
+    <span id="saveStatus" style="font-size:.85rem;color:#666"></span>
+  </div>
+
+  <div id="thead-notes">
+    <table><thead><tr>
+      <th style="width:8%">Адрес</th>
+      <th style="width:30%">Название</th>
+      <th style="width:8%;text-align:center">Тип</th>
+      <th style="width:46%">notes_ru</th>
+      <th style="width:8%;text-align:center">Статус</th>
+    </tr></thead></table>
+  </div>
+  <div id="thead-labels" style="display:none">
+    <table><thead><tr>
+      <th style="width:8%">Адрес</th>
+      <th style="width:28%">Регистр</th>
+      <th style="width:28%">Оригинал (EN)</th>
+      <th style="width:28%">Перевод (RU)</th>
+      <th style="width:8%;text-align:center">Статус</th>
+    </tr></thead></table>
+  </div>
+  <div id="thead-bits" style="display:none">
+    <table><thead><tr>
+      <th style="width:8%">Адрес</th>
+      <th style="width:20%">Регистр</th>
+      <th style="width:8%;text-align:center">Severity</th>
+      <th style="width:28%">Оригинал (EN)</th>
+      <th style="width:28%">Перевод (RU)</th>
+      <th style="width:8%;text-align:center">Статус</th>
+    </tr></thead></table>
+  </div>
+
+  <table>
+    <tbody id="tbody"></tbody>
+  </table>
+  <p id="noResults" style="display:none;color:#999;padding:20px;text-align:center">Ничего не найдено</p>
+</div>
+
+<script>
+var DEVICE = "{{ current_device }}";
+var REGS   = {{ registers_json }};
+
+// --- Преобразуем в плоские массивы для каждой вкладки ---
+var notesArr  = REGS.map(function(r) {
+  return {key: r.reg_type+':'+r.addr, addr: r.addr, name: r.name, unit: r.unit, notes_ru: r.notes_ru||''};
+});
+
+var labelsArr = [];
+REGS.forEach(function(r) {
+  if (!r.labels) return;
+  Object.keys(r.labels).sort(function(a,b){return +a - +b;}).forEach(function(val) {
+    labelsArr.push({
+      addr: r.addr, regName: r.name, val: val,
+      en: r.labels[val],
+      ru: (r.labels_ru && r.labels_ru[val]) || ''
+    });
+  });
+});
+
+var bitsArr = [];
+REGS.forEach(function(r) {
+  if (!r.bits) return;
+  Object.keys(r.bits).sort(function(a,b){return +a - +b;}).forEach(function(bit) {
+    var b = r.bits[bit];
+    bitsArr.push({
+      addr: r.addr, regName: r.name, bit: bit,
+      en: b.name||'', ru: b.name_ru||'', severity: b.severity||''
+    });
+  });
+});
+
+var currentTab = 'notes';
+
+var SEV_COLORS = {
+  shutdown:          '#e74c3c',
+  shutdown_cooldown: '#e67e22',
+  derate:            '#f39c12',
+  warning:           '#3498db',
+  none:              '#95a5a6'
+};
+
+function getArr() {
+  if (currentTab === 'notes')  return notesArr;
+  if (currentTab === 'labels') return labelsArr;
+  return bitsArr;
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  ['notes','labels','bits'].forEach(function(t) {
+    var btn = document.getElementById('tab-'+t);
+    var isActive = t === tab;
+    btn.style.background  = isActive ? '#3498db' : '#ecf0f1';
+    btn.style.color       = isActive ? 'white'   : '#555';
+    btn.style.fontWeight  = isActive ? '600'     : '400';
+    document.getElementById('thead-'+t).style.display = isActive ? '' : 'none';
+  });
+  document.getElementById('search').value = '';
+  document.getElementById('onlyEmpty').checked = false;
+  render();
+}
+
+var tbody = document.getElementById('tbody');
+var noRes  = document.getElementById('noResults');
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function tabKey(s) {
+  try { return btoa(unescape(encodeURIComponent(String(s)))).replace(/[^a-zA-Z0-9]/g,'_'); }
+  catch(e) { return 'k'+Math.abs(String(s).split('').reduce(function(a,c){return a+c.charCodeAt(0);},0)); }
+}
+
+function unitBadge(unit) {
+  var color = unit==='enum'?'#8e44ad': unit==='fault_bitmap'?'#e74c3c': '#7f8c8d';
+  return '<span style="display:inline-block;padding:1px 7px;border-radius:3px;font-size:.75rem;color:white;background:'+color+'">'+escHtml(unit||'—')+'</span>';
+}
+
+function render() {
+  var q      = document.getElementById('search').value.toLowerCase();
+  var onlyE  = document.getElementById('onlyEmpty').checked;
+  var arr    = getArr();
+  var shown  = 0;
+  tbody.innerHTML = '';
+
+  arr.forEach(function(item) {
+    var ru = item.notes_ru !== undefined ? item.notes_ru : item.ru;
+    if (onlyE && ru) return;
+
+    var searchStr;
+    if (currentTab === 'notes') {
+      searchStr = (item.addr+' '+item.name+' '+item.notes_ru).toLowerCase();
+    } else if (currentTab === 'labels') {
+      searchStr = (item.addr+' '+item.regName+' '+item.en+' '+item.ru).toLowerCase();
+    } else {
+      searchStr = (item.addr+' '+item.regName+' '+item.en+' '+item.ru).toLowerCase();
+    }
+    if (q && !searchStr.includes(q)) return;
+
+    shown++;
+    var tr = document.createElement('tr');
+    var key = tabKey(currentTab+':'+item.addr+':'+(item.val||item.bit||''));
+    var statusId = 'st_'+key;
+    var statusHtml = ru ? '✓' : '<span style="color:#e74c3c">—</span>';
+
+    if (currentTab === 'notes') {
+      tr.innerHTML =
+        '<td style="font-size:.85rem;color:#888">'+item.addr+'</td>'+
+        '<td style="font-size:.88rem">'+escHtml(item.name)+'</td>'+
+        '<td style="text-align:center">'+unitBadge(item.unit)+'</td>'+
+        '<td><input type="text" value="'+escHtml(item.notes_ru)+'" data-key="'+escHtml(item.key)+'"'+
+        ' style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:.88rem"'+
+        ' onchange="onChangeNotes(this)" oninput="markDirty()"></td>'+
+        '<td style="text-align:center" id="'+statusId+'">'+statusHtml+'</td>';
+
+    } else if (currentTab === 'labels') {
+      tr.innerHTML =
+        '<td style="font-size:.85rem;color:#888">'+item.addr+'</td>'+
+        '<td style="font-size:.85rem;color:#555">'+escHtml(item.regName)+'</td>'+
+        '<td style="font-family:monospace;font-size:.88rem">'+escHtml(item.en)+'</td>'+
+        '<td><input type="text" value="'+escHtml(item.ru)+'" data-en="'+escHtml(item.en)+'"'+
+        ' style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:.9rem"'+
+        ' onchange="onChangeLabel(this)" oninput="markDirty()"></td>'+
+        '<td style="text-align:center" id="'+statusId+'">'+statusHtml+'</td>';
+
+    } else {
+      var sevColor = SEV_COLORS[item.severity] || '#95a5a6';
+      tr.innerHTML =
+        '<td style="font-size:.85rem;color:#888">'+item.addr+'</td>'+
+        '<td style="font-size:.85rem;color:#555">'+escHtml(item.regName)+'</td>'+
+        '<td style="text-align:center"><span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:.75rem;color:white;background:'+sevColor+'">'+escHtml(item.severity)+'</span></td>'+
+        '<td style="font-size:.85rem;word-break:break-word">'+escHtml(item.en)+'</td>'+
+        '<td><input type="text" value="'+escHtml(item.ru)+'" data-en="'+escHtml(item.en)+'"'+
+        ' style="width:100%;padding:4px 6px;border:1px solid #ddd;border-radius:3px;font-size:.88rem"'+
+        ' onchange="onChangeBit(this)" oninput="markDirty()"></td>'+
+        '<td style="text-align:center" id="'+statusId+'">'+statusHtml+'</td>';
+    }
+    tbody.appendChild(tr);
+  });
+
+  noRes.style.display = shown ? 'none' : 'block';
+  updateBadges();
+}
+
+function updateBadges() {
+  var nFilled = notesArr.filter(function(d){return d.notes_ru;}).length;
+  var lFilled = labelsArr.filter(function(d){return d.ru;}).length;
+  var bFilled = bitsArr.filter(function(d){return d.ru;}).length;
+  document.getElementById('badge-notes').textContent  =
+    '('+nFilled+'/'+notesArr.length+(notesArr.length-nFilled?' ⚠️'+(notesArr.length-nFilled):'')+')';
+  document.getElementById('badge-labels').textContent =
+    '('+lFilled+'/'+labelsArr.length+(labelsArr.length-lFilled?' ⚠️'+(labelsArr.length-lFilled):'')+')';
+  document.getElementById('badge-bits').textContent   =
+    '('+bFilled+'/'+bitsArr.length+(bitsArr.length-bFilled?' ⚠️'+(bitsArr.length-bFilled):'')+')';
+}
+
+function markDirty() {
+  document.getElementById('saveBtn').style.background = '#e67e22';
+}
+
+function onChangeNotes(input) {
+  var key  = input.dataset.key;
+  var val  = input.value.trim();
+  var item = notesArr.find(function(d){ return d.key===key; });
+  if (item) item.notes_ru = val;
+  var cell = document.getElementById('st_'+tabKey('notes:'+input.closest('tr').querySelector('td').textContent+':'));
+  updateBadges(); markDirty();
+}
+
+function onChangeLabel(input) {
+  var en  = input.dataset.en;
+  var ru  = input.value.trim();
+  labelsArr.forEach(function(d){ if (d.en===en) d.ru = ru; });
+  updateBadges(); markDirty();
+}
+
+function onChangeBit(input) {
+  var en  = input.dataset.en;
+  var ru  = input.value.trim();
+  bitsArr.forEach(function(d){ if (d.en===en) d.ru = ru; });
+  updateBadges(); markDirty();
+}
+
+async function saveAll() {
+  var notes = {};
+  notesArr.forEach(function(d){ notes[d.key] = d.notes_ru; });
+
+  var labels = {};
+  labelsArr.forEach(function(d){ labels[d.en] = d.ru; });
+
+  var bits = {};
+  bitsArr.forEach(function(d){ bits[d.en] = d.ru; });
+
+  var saveStatus = document.getElementById('saveStatus');
+  var saveBtn    = document.getElementById('saveBtn');
+  saveStatus.textContent = 'Сохранение...';
+
+  try {
+    var resp = await fetch('/api/map-editor', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({device_type: DEVICE, notes: notes, labels: labels, bits: bits})
+    });
+    var j = await resp.json();
+    if (j.ok) {
+      saveStatus.textContent = '✓ Сохранено';
+      saveBtn.style.background = '#27ae60';
+    } else {
+      saveStatus.textContent = '✗ ' + (j.error||'?');
+    }
+  } catch(e) {
+    saveStatus.textContent = '✗ ' + e;
+  }
+  setTimeout(function(){ saveStatus.textContent = ''; }, 3000);
+}
+
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('onlyEmpty').addEventListener('change', render);
+render();
+</script>
+'''
+
+
+@app.route('/map-editor')
+def map_editor_page():
+    """Страница редактирования карты регистров."""
+    import json as _json
+    device_types = get_registered_device_types()
+    if not device_types:
+        return wrap_content('Редактор карты', '<div class="card"><p>Нет загруженных устройств.</p></div>', auto_reload=False)
+
+    current_device = request.args.get('device', device_types[0])
+    if current_device not in device_types:
+        current_device = device_types[0]
+
+    registers = get_map_editor_data(current_device) or []
+    regs_json = _json.dumps(registers, ensure_ascii=False)
+
+    content = render_template_string(
+        MAP_EDITOR_TEMPLATE,
+        device_types=device_types,
+        current_device=current_device,
+        registers_json=regs_json,
+    )
+    return wrap_content('Редактор карты', content, auto_reload=False)
+
+
+@app.route('/api/map-editor', methods=['PUT'])
+def api_save_map_editor():
+    """PUT /api/map-editor — сохранить изменения из редактора карты.
+    Body: {device_type, notes: {key: text}, labels: {en: ru}, bits: {en: ru}}
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'ok': False, 'error': 'Ожидается JSON-объект'}), 400
+
+    device_type = data.get('device_type', '')
+    if not device_type or device_type not in get_registered_device_types():
+        return jsonify({'ok': False, 'error': f"Устройство '{device_type}' не найдено"}), 400
+
+    errors = []
+
+    # 1. Сохраняем notes_ru в map.jsonl
+    notes = {k: v for k, v in (data.get('notes') or {}).items()
+             if isinstance(k, str) and isinstance(v, str)}
+    if notes:
+        err = save_notes_ru(device_type, notes)
+        if err:
+            errors.append(f"notes: {err}")
+
+    # 2. Сохраняем переводы меток (мержим с существующим словарём)
+    new_labels = {k: v for k, v in (data.get('labels') or {}).items()
+                  if isinstance(k, str) and isinstance(v, str)}
+    if new_labels:
+        merged_labels = get_label_translations()
+        merged_labels.update(new_labels)
+        err = save_label_translations(merged_labels)
+        if err:
+            errors.append(f"labels: {err}")
+
+    # 3. Сохраняем переводы битов (мержим с существующим словарём)
+    new_bits = {k: v for k, v in (data.get('bits') or {}).items()
+                if isinstance(k, str) and isinstance(v, str)}
+    if new_bits:
+        merged_bits = get_bit_translations()
+        merged_bits.update(new_bits)
+        err = save_bit_translations(merged_bits)
+        if err:
+            errors.append(f"bits: {err}")
+
+    if errors:
+        return jsonify({'ok': False, 'error': '; '.join(errors)}), 500
+
+    # Переиздаём метаданные в MQTT
+    mqtt = get_mqtt_client()
+    if mqtt and mqtt.is_connected():
+        for dt in get_registered_device_types():
+            mqtt.publish_metadata(dt)
+        logger.info(f"MQTT metadata republished after map editor save ({device_type})")
+
+    return jsonify({'ok': True})
 
 
 def run_web_ui(host: str = '0.0.0.0', port: int = 8080, debug: bool = False):

@@ -400,6 +400,114 @@ def get_loader(device_type: str = 'pcc') -> Optional[RegisterMapLoader]:
     return _loaders.get(device_type)
 
 
+def get_map_editor_data(device_type: str) -> Optional[List[dict]]:
+    """Возвращает список регистров для редактора карты.
+    Каждая запись содержит: key, addr, reg_type, name, unit, notes_ru,
+    и опционально labels/labels_ru (enum) или bits с name_ru (fault_bitmap).
+    Отсортировано по адресу."""
+    loader = _loaders.get(device_type)
+    if not loader:
+        return None
+
+    with _translations_lock:
+        lt = _label_translations
+    with _bit_translations_lock:
+        bt = _bit_translations
+
+    result = []
+    for (reg_type, addr), reg_def in sorted(loader._register_map.items(),
+                                            key=lambda x: (x[0][0] != 'holding', x[0][1])):
+        entry: dict = {
+            'key':      f"input:{addr}" if reg_type == 'input' else str(addr),
+            'addr':     addr,
+            'reg_type': reg_type,
+            'name':     reg_def.get('name', ''),
+            'unit':     reg_def.get('unit', ''),
+            'notes_ru': reg_def.get('notes_ru', ''),
+        }
+
+        labels = loader._enum_map.get((reg_type, addr))
+        if labels:
+            entry['labels'] = labels
+            entry['labels_ru'] = {k: lt[v] for k, v in labels.items() if v in lt}
+
+        if (reg_type, addr) in loader._fault_addresses:
+            bits: dict = {}
+            for (rt, a, bit), bit_def in loader._fault_bitmap_map.items():
+                if rt == reg_type and a == addr:
+                    bd: dict = {k: v for k, v in bit_def.items() if k in ('name', 'severity')}
+                    nm = bd.get('name', '')
+                    if nm and nm in bt:
+                        bd['name_ru'] = bt[nm]
+                    bits[str(bit)] = bd
+            if bits:
+                entry['bits'] = bits
+
+        result.append(entry)
+
+    return result
+
+
+def save_notes_ru(device_type: str, updates: Dict[str, str]) -> str:
+    """Обновить поля notes_ru в map.jsonl для указанных регистров.
+    updates: {"holding:40010": "новый текст", ...}
+    Пустая строка удаляет поле.
+    Возвращает '' при успехе или сообщение об ошибке."""
+    maps_dir = _device_dirs.get(device_type)
+    if not maps_dir:
+        return f"Устройство '{device_type}' не зарегистрировано"
+
+    map_path = Path(maps_dir) / 'map.jsonl'
+    if not map_path.exists():
+        return f"map.jsonl не найден: {map_path}"
+
+    try:
+        new_lines: List[str] = []
+        changed = 0
+        with open(map_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                stripped = line.rstrip('\n\r')
+                if not stripped.strip():
+                    new_lines.append(stripped)
+                    continue
+                try:
+                    obj = json.loads(stripped)
+                    reg_type = obj.get('reg_type', 'holding')
+                    addr = obj.get('addr')
+                    key = f"{reg_type}:{addr}"
+                    if key in updates:
+                        new_val = updates[key].strip()
+                        if new_val:
+                            obj['notes_ru'] = new_val
+                        elif 'notes_ru' in obj:
+                            del obj['notes_ru']
+                        changed += 1
+                        new_lines.append(json.dumps(obj, ensure_ascii=False, separators=(',', ':')))
+                    else:
+                        new_lines.append(stripped)
+                except json.JSONDecodeError:
+                    new_lines.append(stripped)
+
+        with open(map_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('\n'.join(new_lines))
+
+        # Перезагружаем карту в памяти
+        loader = _loaders.get(device_type)
+        if loader:
+            loader._register_map.clear()
+            loader._enum_map.clear()
+            loader._fault_bitmap_map.clear()
+            loader._fault_addresses.clear()
+            loader.load_map(str(map_path))
+
+        logger.info(f"notes_ru обновлены для '{device_type}': {changed} регистров изменено")
+        return ""
+    except Exception as e:
+        err = f"Ошибка обновления map.jsonl: {e}"
+        logger.error(err)
+        return err
+
+
 def load_device_maps(device_type: str, maps_dir: str) -> bool:
     """
     Load map files for a device type from a directory.
