@@ -1966,36 +1966,14 @@ MAP_EDITOR_TEMPLATE = '''
     <span id="saveStatus" style="font-size:.85rem;color:#666"></span>
   </div>
 
-  <div id="thead-notes">
-    <table><thead><tr>
-      <th style="width:8%">Адрес</th>
-      <th style="width:30%">Название</th>
-      <th style="width:8%;text-align:center">Тип</th>
-      <th style="width:46%">notes_ru</th>
-      <th style="width:8%;text-align:center">Статус</th>
-    </tr></thead></table>
-  </div>
-  <div id="thead-labels" style="display:none">
-    <table><thead><tr>
-      <th style="width:8%">Адрес</th>
-      <th style="width:28%">Регистр</th>
-      <th style="width:28%">Оригинал (EN)</th>
-      <th style="width:28%">Перевод (RU)</th>
-      <th style="width:8%;text-align:center">Статус</th>
-    </tr></thead></table>
-  </div>
-  <div id="thead-bits" style="display:none">
-    <table><thead><tr>
-      <th style="width:8%">Адрес</th>
-      <th style="width:20%">Регистр</th>
-      <th style="width:8%;text-align:center">Severity</th>
-      <th style="width:28%">Оригинал (EN)</th>
-      <th style="width:28%">Перевод (RU)</th>
-      <th style="width:8%;text-align:center">Статус</th>
-    </tr></thead></table>
-  </div>
-
-  <table>
+  <table style="table-layout:fixed;width:100%">
+    <thead id="thead"><tr>
+      <th style="width:7%">Адрес</th>
+      <th style="width:26%">Название</th>
+      <th style="width:7%;text-align:center">Тип</th>
+      <th>notes_ru</th>
+      <th style="width:5%;text-align:center">✓</th>
+    </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
   <p id="noResults" style="display:none;color:#999;padding:20px;text-align:center">Ничего не найдено</p>
@@ -2050,6 +2028,12 @@ function getArr() {
   return bitsArr;
 }
 
+var THEADS = {
+  notes:  '<tr><th style="width:7%">Адрес</th><th style="width:26%">Название</th><th style="width:7%;text-align:center">Тип</th><th>notes_ru</th><th style="width:5%;text-align:center">✓</th></tr>',
+  labels: '<tr><th style="width:7%">Адрес</th><th style="width:26%">Регистр</th><th style="width:30%">Оригинал (EN)</th><th>Перевод (RU)</th><th style="width:5%;text-align:center">✓</th></tr>',
+  bits:   '<tr><th style="width:7%">Адрес</th><th style="width:20%">Регистр</th><th style="width:8%;text-align:center">Severity</th><th style="width:26%">Оригинал (EN)</th><th>Перевод (RU)</th><th style="width:5%;text-align:center">✓</th></tr>'
+};
+
 function switchTab(tab) {
   currentTab = tab;
   ['notes','labels','bits'].forEach(function(t) {
@@ -2058,8 +2042,8 @@ function switchTab(tab) {
     btn.style.background  = isActive ? '#3498db' : '#ecf0f1';
     btn.style.color       = isActive ? 'white'   : '#555';
     btn.style.fontWeight  = isActive ? '600'     : '400';
-    document.getElementById('thead-'+t).style.display = isActive ? '' : 'none';
   });
+  document.getElementById('thead').innerHTML = THEADS[tab];
   document.getElementById('search').value = '';
   document.getElementById('onlyEmpty').checked = false;
   render();
