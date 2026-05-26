@@ -2003,7 +2003,7 @@ MAP_EDITOR_TEMPLATE = '''
 
 <script>
 var DEVICE = "{{ current_device }}";
-var REGS   = {{ registers_json }};
+var REGS   = {{ registers_json|safe }};
 
 // --- Преобразуем в плоские массивы для каждой вкладки ---
 var notesArr  = REGS.map(function(r) {
