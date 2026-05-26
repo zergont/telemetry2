@@ -18,7 +18,8 @@ from maps_loader import (get_registered_device_types, get_device_stats, load_dev
                          add_to_ignore, remove_from_ignore, get_all_ignore_lists, clear_ignore_list,
                          get_label_translations, save_label_translations,
                          get_bit_translations, save_bit_translations,
-                         get_map_editor_data, save_notes_ru)
+                         get_map_editor_data, save_notes_ru,
+                         get_device_maps_dir)
 from map_validator import validate_device_maps
 from version import __version__
 
@@ -630,8 +631,10 @@ DEVICES_TEMPLATE = '''
                 <td>
                     <button class="btn" style="padding:4px 10px;font-size:0.8rem"
                         onclick="editKeys('{{ d.device_type }}', '{{ d.payload_keys|join(', ') }}')">✏️ Ключи</button>
+                    <a class="btn" style="padding:4px 10px;font-size:0.8rem;background:#27ae60"
+                        href="/api/devices/{{ d.device_type }}/maps/map.jsonl" download>📥 map.jsonl</a>
                     <button class="btn" style="padding:4px 10px;font-size:0.8rem;background:#8e44ad"
-                        onclick="openUpdateMaps('{{ d.device_type }}')">📂 Карты</button>
+                        onclick="openUpdateMaps('{{ d.device_type }}')">📂 Обновить</button>
                     <button class="btn btn-danger" style="padding:4px 10px;font-size:0.8rem"
                         onclick="removeDevice('{{ d.device_type }}')">Удалить</button>
                 </td>
@@ -1029,14 +1032,10 @@ async function openUpdateMaps(deviceType) {
     try {
         var resp = await fetch('/api/devices/' + deviceType + '/maps');
         var json = await resp.json();
-        var files = ['register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl'];
-        var links = files.map(function(f) {
-            if (json.files && json.files.indexOf(f) >= 0) {
-                return '<a href="/api/devices/' + deviceType + '/maps/' + f + '" download style="margin-right:12px;color:#3498db">📥 ' + f + '</a>';
-            }
-            return '<span style="margin-right:12px;color:#bbb">' + f + ' (нет)</span>';
-        }).join('');
-        document.getElementById('modal-dl-links').innerHTML = links;
+        var hasMap = json.files && json.files.indexOf('map.jsonl') >= 0;
+        document.getElementById('modal-dl-links').innerHTML = hasMap
+            ? '<a href="/api/devices/' + deviceType + '/maps/map.jsonl" download style="color:#3498db">📥 map.jsonl</a>'
+            : '<span style="color:#bbb">map.jsonl (нет)</span>';
     } catch(e) {
         document.getElementById('modal-dl-links').innerHTML = '<span style="color:#e74c3c">Ошибка загрузки списка файлов</span>';
     }
@@ -1448,7 +1447,10 @@ def api_list_map_files(device_type: str):
     """List available map files for a device."""
     if device_type not in get_registered_device_types():
         return jsonify({'ok': False, 'error': 'Не найдено'}), 404
-    maps_dir = Path('maps') / device_type
+    maps_dir_str = get_device_maps_dir(device_type)
+    if not maps_dir_str:
+        return jsonify({'ok': False, 'error': 'Директория не найдена'}), 404
+    maps_dir = Path(maps_dir_str)
     known = ['map.jsonl', 'register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json']
     files = [f for f in known if (maps_dir / f).exists()]
     return jsonify({'ok': True, 'files': files})
@@ -1460,9 +1462,10 @@ def api_download_map_file(device_type: str, filename: str):
     allowed = {'map.jsonl', 'register_map.jsonl', 'enum_map.json', 'fault_bitmap_map.jsonl', 'ignore_registers.json'}
     if filename not in allowed:
         abort(404)
-    if device_type not in get_registered_device_types():
+    maps_dir_str = get_device_maps_dir(device_type)
+    if not maps_dir_str:
         abort(404)
-    filepath = Path('maps') / device_type / filename
+    filepath = Path(maps_dir_str) / filename
     if not filepath.exists():
         abort(404)
     return send_file(str(filepath.resolve()), as_attachment=True, download_name=filename)

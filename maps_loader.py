@@ -400,6 +400,11 @@ def get_loader(device_type: str = 'pcc') -> Optional[RegisterMapLoader]:
     return _loaders.get(device_type)
 
 
+def get_device_maps_dir(device_type: str) -> Optional[str]:
+    """Return the maps directory path for a device type, or None if not registered."""
+    return _device_dirs.get(device_type)
+
+
 def get_map_editor_data(device_type: str) -> Optional[List[dict]]:
     """Возвращает список регистров для редактора карты.
     Каждая запись содержит: key, addr, reg_type, name, unit, notes_ru,
