@@ -1644,6 +1644,13 @@ TRANSLATIONS_TEMPLATE = '''
             style="padding:7px 18px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:.9rem">
       💾 Сохранить все
     </button>
+    <a id="downloadBtn" href="/api/translations/export" download
+       style="padding:7px 14px;background:#3498db;color:white;text-decoration:none;border-radius:4px;font-size:.9rem">
+      📥 Скачать
+    </a>
+    <label style="padding:7px 14px;background:#8e44ad;color:white;border-radius:4px;font-size:.9rem;cursor:pointer">
+      📤 Загрузить<input type="file" id="uploadFile" accept=".json" style="display:none" onchange="uploadFile(this)">
+    </label>
     <span id="saveStatus" style="font-size:.85rem;color:#666"></span>
   </div>
 
@@ -1684,9 +1691,43 @@ function switchTab(tab) {
   tb.style.background   = !isLab ? '#3498db' : '#ecf0f1';
   tb.style.color        = !isLab ? 'white'   : '#555';
   tb.style.fontWeight   = !isLab ? '600'     : '400';
+  document.getElementById('downloadBtn').href =
+    isLab ? '/api/translations/export' : '/api/bit-translations/export';
   document.getElementById('search').value = '';
   document.getElementById('onlyEmpty').checked = false;
   render();
+}
+
+async function uploadFile(input) {
+  if (!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  input.value = '';
+  var saveStatus = document.getElementById('saveStatus');
+  saveStatus.textContent = 'Загрузка...';
+  try {
+    var text = await file.text();
+    var data = JSON.parse(text);
+    var url = currentTab === 'labels' ? '/api/translations' : '/api/bit-translations';
+    var resp = await fetch(url, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    var j = await resp.json();
+    if (j.ok) {
+      // Обновляем данные в памяти
+      var arr = currentTab === 'labels' ? labelsArr : bitsArr;
+      arr.forEach(function(item) { item.ru = data[item.en] || item.ru; });
+      saveStatus.textContent = '✓ Загружено (' + j.count + ' записей)';
+      document.getElementById('saveBtn').style.background = '#27ae60';
+      updateBadges(); render();
+    } else {
+      saveStatus.textContent = '✗ ' + (j.error || '?');
+    }
+  } catch(e) {
+    saveStatus.textContent = '✗ ' + e;
+  }
+  setTimeout(function(){ saveStatus.textContent = ''; }, 4000);
 }
 
 const tbody = document.getElementById('tbody');
@@ -1801,6 +1842,28 @@ def translations_page():
                .replace('{{ labels_json }}', labels_json)
                .replace('{{ bits_json }}',   bits_json))
     return wrap_content('Переводы', content, auto_reload=False)
+
+
+@app.route('/api/translations/export')
+def api_export_translations():
+    """GET /api/translations/export — скачать label_translations.json."""
+    from maps_loader import _TRANSLATIONS_FILE
+    path = _TRANSLATIONS_FILE
+    if not path.exists():
+        abort(404)
+    return send_file(str(path.resolve()), as_attachment=True,
+                     download_name='label_translations.json', mimetype='application/json')
+
+
+@app.route('/api/bit-translations/export')
+def api_export_bit_translations():
+    """GET /api/bit-translations/export — скачать bit_translations.json."""
+    from maps_loader import _BIT_TRANSLATIONS_FILE
+    path = _BIT_TRANSLATIONS_FILE
+    if not path.exists():
+        abort(404)
+    return send_file(str(path.resolve()), as_attachment=True,
+                     download_name='bit_translations.json', mimetype='application/json')
 
 
 @app.route('/api/translations')
