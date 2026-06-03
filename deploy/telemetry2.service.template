@@ -5,9 +5,9 @@ Wants=mosquitto.service
 
 [Service]
 Type=simple
-User=folist
-Group=folist
-WorkingDirectory=/opt/cg-decoder
+User={{APP_USER}}
+Group={{APP_USER}}
+WorkingDirectory={{APP_DIR}}
 ExecStart=/usr/bin/python3 app.py --config config.yaml
 Restart=on-failure
 RestartSec=5
