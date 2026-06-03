@@ -1,0 +1,18 @@
+[Unit]
+Description=Modbus Decoder / CG Telemetry
+After=network.target mosquitto.service
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=folist
+Group=folist
+WorkingDirectory=/opt/cg-decoder
+ExecStart=/usr/bin/python3 app.py --config config.yaml
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
