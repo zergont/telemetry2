@@ -15,6 +15,7 @@
 Поддерживает несколько типов устройств через маппинг payload_key → device_type.
 """
 
+import gzip
 import json
 import re
 import logging
@@ -78,6 +79,9 @@ class MqttClient:
         self.messages_decoded = 0
         self.messages_published = 0
         self.decode_errors = 0
+        self.gzip_received = 0
+        self.gzip_bytes_in = 0
+        self.gzip_bytes_out = 0
 
         # Auto-discovery: unknown payload keys -> {key: {count, first_seen, last_seen}}
         self._unknown_keys: Dict[str, dict] = {}
@@ -311,6 +315,24 @@ class MqttClient:
 
         router_sn = match.group(1)
 
+        # Decompress GZIP if detected (magic bytes \x1f\x8b)
+        if payload[:2] == b'\x1f\x8b':
+            compressed_size = len(payload)
+            try:
+                payload = gzip.decompress(payload)
+            except Exception as e:
+                logger.error(f"Ошибка декомпрессии GZIP: {e}")
+                self._store_raw(topic, 'gzip_error', repr(payload[:64]), str(e))
+                with self._lock:
+                    self.decode_errors += 1
+                return
+            with self._lock:
+                self.gzip_received += 1
+                self.gzip_bytes_in += compressed_size
+                self.gzip_bytes_out += len(payload)
+            logger.debug(f"GZIP: {compressed_size} → {len(payload)} байт "
+                         f"({compressed_size * 100 // len(payload)}% от оригинала)")
+
         # Parse JSON payload
         try:
             data = json.loads(payload.decode('utf-8'))
@@ -535,6 +557,9 @@ class MqttClient:
                 'messages_published': self.messages_published,
                 'decode_errors': self.decode_errors,
                 'raw_undecoded': len(self._raw_undecoded),
+                'gzip_received': self.gzip_received,
+                'gzip_bytes_in': self.gzip_bytes_in,
+                'gzip_bytes_out': self.gzip_bytes_out,
             }
 
     # ----------------------------------------------------------------

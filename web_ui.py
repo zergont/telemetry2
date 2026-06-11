@@ -284,6 +284,19 @@ INDEX_TEMPLATE = '''
         <tr><td>Опубликовано</td><td>{{ mqtt_stats.messages_published }}</td></tr>
         <tr><td>Ошибки MQTT</td><td>{{ mqtt_stats.decode_errors }}</td></tr>
         <tr><td>Ошибки декодирования</td><td>{{ store_decode_errors }} <a href="/devices" style="font-size:0.8rem">(подробнее)</a></td></tr>
+        {% if mqtt_stats.gzip_received > 0 %}
+        <tr>
+            <td>Получено GZIP</td>
+            <td>{{ mqtt_stats.gzip_received }} сообщ.&nbsp;&nbsp;
+                {{ "%.1f"|format(mqtt_stats.gzip_bytes_in / 1024) }} кБ
+                &rarr;
+                {{ "%.1f"|format(mqtt_stats.gzip_bytes_out / 1024) }} кБ
+                {% if mqtt_stats.gzip_bytes_out > 0 %}
+                (сжатие {{ 100 - (mqtt_stats.gzip_bytes_in * 100 // mqtt_stats.gzip_bytes_out) }}%)
+                {% endif %}
+            </td>
+        </tr>
+        {% endif %}
     </table>
 </div>
 {% endif %}
