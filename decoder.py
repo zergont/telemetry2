@@ -28,6 +28,13 @@
   bitfield  — битовое поле (u16)
 
 Дополнительные поля карты регистров:
+  na_values   — точечные сервисные коды «нет данных» (например [65535]).
+  na_ranges   — диапазоны сервисных кодов [[min, max], ...]. Если поле не
+                задано — применяются DEFAULT_NA_RANGES по data_type (верх
+                диапазона типа, коды Cummins/J1939). Пустой список [] —
+                отключить дефолты для регистра (например счётчик, честно
+                доживающий до верха диапазона).
+                NA-регистр публикуется с value=null, na=true, raw сохраняется.
   addr_stride — шаг по адресному пространству (по умолчанию = word_len).
                 Используется когда адресный шаг не совпадает с числом слов данных.
                 Пример: word_len=1, addr_stride=2 — роутер отдаёт одно готовое значение
@@ -47,6 +54,33 @@ from typing import List, Optional, Any, Tuple
 from maps_loader import get_loader, RegisterMapLoader
 
 logger = logging.getLogger(__name__)
+
+# Причина «сервисный код NA» — используется внутри модуля для распознавания
+NA_REASON = "Значение NA"
+
+# Сервисные коды Cummins/J1939: верх диапазона типа зарезервирован под
+# «нет данных» / «ошибка датчика» (наблюдалось: 0xFFFC у u16 → 65532 кПа,
+# 0x7FFC у s16 → 3276.4 °C). Точечные na_values в картах их не покрывают.
+# Применяются ПО УМОЛЧАНИЮ ко всем числовым регистрам; карта может
+# переопределить полем na_ranges (пустой список [] — отключить для регистра).
+# Тип raw исключён намеренно: он отдаёт сырые данные как есть.
+DEFAULT_NA_RANGES = {
+    'u16':    [(0xFB00, 0xFFFF)],
+    's16':    [(0x7F00, 0x7FFF), (-0x8000, -0x7F01)],
+    'u32':    [(0xFB000000, 0xFFFFFFFF)],
+    'u32_le': [(0xFB000000, 0xFFFFFFFF)],
+    's32':    [(0x7F000000, 0x7FFFFFFF), (-0x80000000, -0x7F000001)],
+}
+
+
+def _is_na(raw_value, na_values, na_ranges) -> bool:
+    """Сервисный код «нет данных»: точечные значения карты или диапазоны."""
+    if raw_value in na_values:
+        return True
+    for lo, hi in na_ranges:
+        if lo <= raw_value <= hi:
+            return True
+    return False
 
 
 class ModbusDecoder:
@@ -104,6 +138,10 @@ class ModbusDecoder:
         multiplier = reg_def.get('multiplier', 1.0)
         offset = reg_def.get('offset', 0.0)
         na_values = reg_def.get('na_values', [])
+        # na_ranges из карты переопределяют дефолты ([] — отключить), иначе по типу
+        na_ranges = reg_def.get('na_ranges')
+        if na_ranges is None:
+            na_ranges = DEFAULT_NA_RANGES.get(data_type, [])
 
         # Check if we have enough words
         if word_idx + word_len > len(words):
@@ -118,7 +156,7 @@ class ModbusDecoder:
             first_word = words[word_idx]
             if isinstance(first_word, float):
                 raw_value = first_word
-                if raw_value in na_values:
+                if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
                 return decoded_value, raw_value, None
@@ -126,7 +164,7 @@ class ModbusDecoder:
             if data_type in ('u16', 'raw'):
                 # Single 16-bit unsigned
                 raw_value = words[word_idx]
-                if raw_value in na_values:
+                if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
@@ -136,7 +174,7 @@ class ModbusDecoder:
                 # Convert to signed
                 if raw_value >= 0x8000:
                     raw_value = raw_value - 0x10000
-                if raw_value in na_values:
+                if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
@@ -149,7 +187,7 @@ class ModbusDecoder:
                     raw_value = (hi << 16) | lo
                 else:
                     raw_value = words[word_idx]
-                if raw_value in na_values:
+                if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
@@ -162,7 +200,7 @@ class ModbusDecoder:
                     raw_value = (hi << 16) | lo
                 else:
                     raw_value = words[word_idx]
-                if raw_value in na_values:
+                if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
@@ -174,7 +212,7 @@ class ModbusDecoder:
                 # Convert to signed 32-bit
                 if raw_value >= 0x80000000:
                     raw_value = raw_value - 0x100000000
-                if raw_value in na_values:
+                if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
@@ -303,6 +341,16 @@ class ModbusDecoder:
         # Decode value
         decoded, raw, reason = self.decode_value(reg_def, words)
         result['raw'] = raw
+
+        if reason == NA_REASON:
+            # Сервисный код «нет данных» — НЕ ошибка декодирования, а валидный
+            # результат: публикуется с value=null и na=true (reason остаётся null).
+            # Писатель БД кладёт NULL (latest_state обновляется), UI показывает
+            # прочерк — иначе потребители вечно держат последнее валидное значение.
+            result['na'] = True
+            if self.debug_mode:
+                logger.debug(f"Регистр {addr}: сервисный код NA (raw={raw})")
+            return result
 
         if reason:
             result['reason'] = reason

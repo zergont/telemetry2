@@ -398,6 +398,7 @@ PANEL_TEMPLATE = '''
                 <td>
                     {% if reg.value is none %}
                         <span class="value-null">null</span>
+                        {% if reg.na %}<br><small>(нет данных — сервисный код)</small>{% endif %}
                         {% if reg.reason %}<br><small>({{ reg.reason }})</small>{% endif %}
                     {% elif reg.unit == 'fault_bitmap' %}
                         {% if reg.value.faults %}

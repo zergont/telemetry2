@@ -117,6 +117,18 @@ def validate_map(filepath: str) -> List[str]:
             if not isinstance(na_values, list):
                 errors.append(f"Строка {line_num}: 'na_values' должен быть массивом")
 
+            # na_ranges (опционально; переопределяет дефолты декодера)
+            na_ranges = entry.get('na_ranges')
+            if na_ranges is not None:
+                if not isinstance(na_ranges, list):
+                    errors.append(f"Строка {line_num}: 'na_ranges' должен быть массивом")
+                else:
+                    for rng in na_ranges:
+                        if (not isinstance(rng, list) or len(rng) != 2
+                                or not all(isinstance(v, (int, float)) for v in rng)):
+                            errors.append(
+                                f"Строка {line_num}: элемент na_ranges должен быть парой чисел [min, max]")
+
             unit = entry.get('unit', '')
 
             # Enum: проверяем labels
@@ -242,6 +254,18 @@ def validate_register_map(filepath: str) -> List[str]:
             na_values = entry.get('na_values', [])
             if not isinstance(na_values, list):
                 errors.append(f"Строка {line_num}: na_values должен быть массивом, получено {type(na_values).__name__}")
+
+            # na_ranges (опционально; переопределяет дефолты декодера)
+            na_ranges = entry.get('na_ranges')
+            if na_ranges is not None:
+                if not isinstance(na_ranges, list):
+                    errors.append(f"Строка {line_num}: na_ranges должен быть массивом")
+                else:
+                    for rng in na_ranges:
+                        if (not isinstance(rng, list) or len(rng) != 2
+                                or not all(isinstance(v, (int, float)) for v in rng)):
+                            errors.append(
+                                f"Строка {line_num}: элемент na_ranges должен быть парой чисел [min, max]")
 
             # Duplicate check
             key = (reg_type, addr)
