@@ -83,6 +83,30 @@ def _is_na(raw_value, na_values, na_ranges) -> bool:
     return False
 
 
+# Разрядность беззнаковых типов — для нормализации знака pre-decoded значений.
+UNSIGNED_BITS = {
+    'u16':    16,
+    'raw':    16,
+    'u32':    32,
+    'u32_le': 32,
+}
+
+
+def _normalize_unsigned(raw_value, data_type):
+    """Привести отрицательное pre-decoded значение к беззнаковому домену.
+
+    Роутер (Teltonika) может прочитать беззнаковый регистр как ЗНАКОВЫЙ и
+    прислать готовое отрицательное значение (например -7669 для near-max
+    Controller On Time). Для u16/u32 отрицательное бессмысленно — прибавляем
+    2^bits, чтобы вернуть истинное беззнаковое значение ДО NA-проверки
+    (тогда near-max сентинелы корректно попадают в na_ranges).
+    """
+    bits = UNSIGNED_BITS.get(data_type)
+    if bits is not None and raw_value < 0:
+        return raw_value + (1 << bits)
+    return raw_value
+
+
 class ModbusDecoder:
     """
     Decodes raw Modbus register data into human-readable values.
@@ -155,7 +179,9 @@ class ModbusDecoder:
             # If the word is a float, treat it as already decoded — apply multiplier/offset only
             first_word = words[word_idx]
             if isinstance(first_word, float):
-                raw_value = first_word
+                # Беззнаковый регистр, пришедший отрицательным — знаковое чтение
+                # роутером; возвращаем в беззнаковый домен до NA-проверки
+                raw_value = _normalize_unsigned(first_word, data_type)
                 if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
