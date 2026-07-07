@@ -83,28 +83,18 @@ def _is_na(raw_value, na_values, na_ranges) -> bool:
     return False
 
 
-# Разрядность беззнаковых типов — для нормализации знака pre-decoded значений.
-UNSIGNED_BITS = {
-    'u16':    16,
-    'raw':    16,
-    'u32':    32,
-    'u32_le': 32,
-}
+def _u16(word) -> int:
+    """Сырое 16-битное слово от роутера → беззнаковое [0..65535].
 
-
-def _normalize_unsigned(raw_value, data_type):
-    """Привести отрицательное pre-decoded значение к беззнаковому домену.
-
-    Роутер (Teltonika) может прочитать беззнаковый регистр как ЗНАКОВЫЙ и
-    прислать готовое отрицательное значение (например -7669 для near-max
-    Controller On Time). Для u16/u32 отрицательное бессмысленно — прибавляем
-    2^bits, чтобы вернуть истинное беззнаковое значение ДО NA-проверки
-    (тогда near-max сентинелы корректно попадают в na_ranges).
+    Роутер передаёт каждый регистр как ЗНАКОВОЕ 16-бит INT (high byte first):
+    слово со старшим битом приходит отрицательным (например 0xE9BB → -5701).
+    Маскируем к беззнаковому ДО типовой логики — иначе u16 уходит отрицательным,
+    а склейка u32 `(hi<<16)|lo` со знаковым lo схлопывается в мусор
+    (теряет старшее слово). Знак применяется later на собранном значении
+    (s16/s32). Для регистров, где число уже приходит как есть — не мешает,
+    положительные < 32768 маска не трогает.
     """
-    bits = UNSIGNED_BITS.get(data_type)
-    if bits is not None and raw_value < 0:
-        return raw_value + (1 << bits)
-    return raw_value
+    return int(word) & 0xFFFF
 
 
 class ModbusDecoder:
@@ -179,9 +169,7 @@ class ModbusDecoder:
             # If the word is a float, treat it as already decoded — apply multiplier/offset only
             first_word = words[word_idx]
             if isinstance(first_word, float):
-                # Беззнаковый регистр, пришедший отрицательным — знаковое чтение
-                # роутером; возвращаем в беззнаковый домен до NA-проверки
-                raw_value = _normalize_unsigned(first_word, data_type)
+                raw_value = first_word
                 if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
@@ -189,14 +177,14 @@ class ModbusDecoder:
 
             if data_type in ('u16', 'raw'):
                 # Single 16-bit unsigned
-                raw_value = words[word_idx]
+                raw_value = _u16(words[word_idx])
                 if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
             elif data_type == 's16':
                 # Single 16-bit signed
-                raw_value = words[word_idx]
+                raw_value = _u16(words[word_idx])
                 # Convert to signed
                 if raw_value >= 0x8000:
                     raw_value = raw_value - 0x10000
@@ -205,35 +193,35 @@ class ModbusDecoder:
                 decoded_value = raw_value * multiplier + offset
 
             elif data_type == 'u32':
-                # Two 16-bit words, big-endian (ABCD order: hi, lo)
-                # If word_len=1: value is already decoded by router (Teltonika 32bit UINT)
+                # Two 16-bit words, big-endian (ABCD order: hi, lo).
+                # Слова маскируем к беззнаковому: младшее часто приходит
+                # отрицательным (знаковый INT), иначе склейка ломается.
                 if word_idx + 1 < len(words):
-                    hi = words[word_idx]
-                    lo = words[word_idx + 1]
+                    hi = _u16(words[word_idx])
+                    lo = _u16(words[word_idx + 1])
                     raw_value = (hi << 16) | lo
                 else:
-                    raw_value = words[word_idx]
+                    raw_value = _u16(words[word_idx])
                 if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
             elif data_type == 'u32_le':
                 # Two 16-bit words, little-endian (DCBA order: lo, hi)
-                # If word_len=1: value is already decoded by router
                 if word_idx + 1 < len(words):
-                    lo = words[word_idx]
-                    hi = words[word_idx + 1]
+                    lo = _u16(words[word_idx])
+                    hi = _u16(words[word_idx + 1])
                     raw_value = (hi << 16) | lo
                 else:
-                    raw_value = words[word_idx]
+                    raw_value = _u16(words[word_idx])
                 if _is_na(raw_value, na_values, na_ranges):
                     return None, raw_value, "Значение NA"
                 decoded_value = raw_value * multiplier + offset
 
             elif data_type == 's32':
                 # Two 16-bit words, big-endian, signed
-                hi = words[word_idx]
-                lo = words[word_idx + 1] if word_idx + 1 < len(words) else 0
+                hi = _u16(words[word_idx])
+                lo = _u16(words[word_idx + 1]) if word_idx + 1 < len(words) else 0
                 raw_value = (hi << 16) | lo
                 # Convert to signed 32-bit
                 if raw_value >= 0x80000000:
@@ -244,8 +232,8 @@ class ModbusDecoder:
 
             elif data_type == 'f32':
                 # Two 16-bit words as IEEE754 float
-                hi = words[word_idx]
-                lo = words[word_idx + 1] if word_idx + 1 < len(words) else 0
+                hi = _u16(words[word_idx])
+                lo = _u16(words[word_idx + 1]) if word_idx + 1 < len(words) else 0
                 raw_value = (hi << 16) | lo
                 # Convert to float
                 try:
@@ -255,17 +243,17 @@ class ModbusDecoder:
 
             elif data_type == 'char':
                 # Character string - return raw words
-                raw_value = words[word_idx]
+                raw_value = _u16(words[word_idx])
                 decoded_value = raw_value
 
             elif data_type == 'bitfield':
                 # Bitfield - return raw for now, decode elsewhere if needed
-                raw_value = words[word_idx]
+                raw_value = _u16(words[word_idx])
                 decoded_value = raw_value
 
             else:
                 # Unknown type - treat as u16
-                raw_value = words[word_idx]
+                raw_value = _u16(words[word_idx])
                 decoded_value = raw_value
                 if self.debug_mode:
                     logger.warning(f"Неизвестный data_type '{data_type}', обработка как u16")
@@ -290,6 +278,9 @@ class ModbusDecoder:
         - faults: list of decoded faults (if known)
         - unknown_bits: list of active bits with no definition
         """
+        # Роутер шлёт слово знаковым INT: при старшем бите приходит отрицательным.
+        # Без маски (raw >> bit) sign-extend'ит старшие биты → ложные аварии.
+        raw_value = int(raw_value) & 0xFFFF
         result = {
             'raw': raw_value,
             'hex': f"0x{raw_value:04X}",
