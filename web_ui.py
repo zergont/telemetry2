@@ -16,13 +16,18 @@ UI не знает ничего о Modbus — только отображает 
 
 import os
 import logging
+import math
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from flask import Flask, render_template_string, jsonify, abort, request, send_file
 
 from panel_store import get_store, PanelStatus
 from mqtt_client import get_mqtt_client
+from clock_guard import (get_clock_guard, ClockGuard, TS_TZ_SHIFT, TS_FUTURE, TS_OFFSET_JUMP,
+                         TS_INVALID, TS_LATE, MODE_FLAG, MODE_CORRECT,
+                         EP_ACTION_CORRECTED, EP_ACTION_FLAGGED, EP_ACTION_QUARANTINED,
+                         EP_ACTION_REPLACED)
 from maps_loader import (get_registered_device_types, get_device_stats, load_device_maps, remove_device,
                          add_to_ignore, remove_from_ignore, get_all_ignore_lists, clear_ignore_list,
                          get_label_translations, save_label_translations,
@@ -159,6 +164,22 @@ def wrap_content(title: str, content: str, auto_reload: bool = True) -> str:
         button.btn-danger {{ background: #e74c3c; }}
         button.btn-danger:hover {{ background: #c0392b; }}
         .raw-value {{ color: #888; font-size: 0.85rem; }}
+        .clock-ok {{ background: #27ae60; color: white; }}
+        .clock-warn {{ background: #e67e22; color: white; }}
+        .clock-bad {{ background: #e74c3c; color: white; }}
+        .clock-unknown {{ background: #95a5a6; color: white; }}
+        .clock-mode {{
+            display: inline-block;
+            margin-left: 6px;
+            padding: 0 6px;
+            border: 1px solid #8e44ad;
+            border-radius: 4px;
+            color: #8e44ad;
+            font-size: 0.75rem;
+        }}
+        .clock-count-warn {{ color: #e67e22; font-weight: 600; }}
+        .clock-count-bad {{ color: #e74c3c; font-weight: 600; }}
+        tr.clock-open {{ background: #fff8e1; }}
     </style>
 </head>
 <body>
@@ -181,7 +202,7 @@ def wrap_content(title: str, content: str, auto_reload: bool = True) -> str:
         {reload_script}
 
         async function clearMemory() {{
-            if (!confirm('Очистить все in-memory данные (роутеры, панели, регистры)?')) return;
+            if (!confirm('Очистить все in-memory данные (роутеры, панели, регистры, состояние часов роутеров и журнал эпизодов метки времени)?')) return;
             try {{
                 const response = await fetch('/api/admin/clear-memory', {{ method: 'POST' }});
                 if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -238,6 +259,18 @@ async function clearRaw() {
 
 
 INDEX_TEMPLATE = '''
+{% for r in clock_alerts %}
+<div class="card clock-alert" style="border-left:4px solid #e74c3c">
+    <h2 style="color:#e74c3c">⏱ Роутер {{ r.router_sn }} молчит после сдвига часов</h2>
+    <p style="margin-bottom:6px">{{ r.silence.message }}</p>
+    <p class="gps">
+        {% if r.silence.since_local %}Последняя запись принята {{ r.silence.since_local }}.{% endif %}
+        {% if r.silence.wait_until_ts %}Последняя «будущая» метка: {{ r.silence.wait_until_ts }}.{% endif %}
+        <a href="/devices#clock-episodes">Эпизоды метки времени →</a>
+    </p>
+</div>
+{% endfor %}
+
 <div class="stats">
     <div class="stat-box success">
         <div class="stat-value">{{ stats.routers }}</div>
@@ -284,6 +317,22 @@ INDEX_TEMPLATE = '''
         <tr><td>Опубликовано</td><td>{{ mqtt_stats.messages_published }}</td></tr>
         <tr><td>Ошибки MQTT</td><td>{{ mqtt_stats.decode_errors }}</td></tr>
         <tr><td>Ошибки декодирования</td><td>{{ store_decode_errors }} <a href="/devices" style="font-size:0.8rem">(подробнее)</a></td></tr>
+        {% if clock_counters %}
+        <tr>
+            <td>Метки времени</td>
+            <td>
+                {% for c in clock_counters['items'] %}<span class="{{ c.cls }}" style="white-space:nowrap">{{ c.label }}&nbsp;{{ c.value }}</span>{% if not loop.last %} · {% endif %}{% endfor %}
+                <a href="/devices#clock-episodes" style="font-size:0.8rem">(эпизоды)</a>
+                <br><span class="gps">
+                {% if clock_counters.enabled %}
+                    режим: <strong>{{ clock_counters.mode or '—' }}</strong>{% if clock_counters.overrides %}, свой режим у роутеров: {{ clock_counters.overrides }}{% endif %}
+                {% else %}
+                    контроль метки времени выключен
+                {% endif %}
+                </span>
+            </td>
+        </tr>
+        {% endif %}
         {% if mqtt_stats.gzip_received > 0 %}
         <tr>
             <td>Получено GZIP</td>
@@ -311,6 +360,7 @@ INDEX_TEMPLATE = '''
                 <th>GPS</th>
                 <th>Панели</th>
                 <th>Статус</th>
+                <th>Часы</th>
             </tr>
         </thead>
         <tbody>
@@ -339,6 +389,19 @@ INDEX_TEMPLATE = '''
                 <td>
                     {{ router.panels|length }} панел(ь/ей)
                 </td>
+                <td class="clock-cell">
+                    {% if router.clock %}
+                        <span class="status {{ clock_classes.get(router.clock.clock_state, 'clock-unknown') }}">{{ router.clock.clock_label }}</span>
+                        {% if router.clock_override %}<span class="clock-mode" title="Свой режим роутера (clock_guard.routers)">режим: {{ router.clock.mode }}</span>{% endif %}
+                        <br><span class="gps">
+                            {% if router.clock.last_offset_sec is not none %}offset {{ router.clock.last_offset_sec|clock_offset }} · {% endif %}эпизодов за 24 ч: {{ router.clock.episodes_24h }}
+                        </span>
+                    {% elif clock_enabled %}
+                        <span class="status clock-unknown">нет данных</span>
+                    {% else %}
+                        <span class="value-null" title="Контроль метки времени выключен">—</span>
+                    {% endif %}
+                </td>
             </tr>
         {% endfor %}
         </tbody>
@@ -351,7 +414,7 @@ INDEX_TEMPLATE = '''
 <div class="card">
     <h2>🧹 Обслуживание</h2>
     <button class="btn btn-danger" onclick="clearMemory()">Очистить in-memory</button>
-    <p class="gps">Удаляет все роутеры/панели/регистры из памяти. Новые данные появятся после следующих MQTT-сообщений.</p>
+    <p class="gps">Удаляет все роутеры/панели/регистры из памяти, а также состояние часов роутеров и журнал эпизодов метки времени (счётчики сохраняются). Новые данные появятся после следующих MQTT-сообщений.</p>
 </div>
 
 <div class="refresh-info">Автообновление каждые 5 секунд</div>
@@ -440,6 +503,224 @@ PANEL_TEMPLATE = '''
 
 
 # ============================================================
+# Контроль метки времени (clock_guard) — помощники для UI
+# ============================================================
+
+# Цвет значка «Часы» по clock_state роутера; остальное (unknown) — серый
+CLOCK_STATE_CLASSES = {
+    'ok': 'clock-ok',
+    'ahead': 'clock-warn',
+    'behind': 'clock-warn',
+    'future': 'clock-warn',
+    'jump': 'clock-warn',
+    'invalid': 'clock-bad',
+    'silent': 'clock-bad',
+}
+
+# Тексты раздела «Метка времени» (передаются и в JS — один источник)
+CLOCK_TEXT = {
+    'actions': {
+        EP_ACTION_CORRECTED: 'исправлено',
+        EP_ACTION_FLAGGED: 'флаг',
+        EP_ACTION_QUARANTINED: 'карантин',
+        EP_ACTION_REPLACED: 'время приёма',
+    },
+    'close': {
+        'normal': 'метки в норме',
+        'silence': 'молчание',
+        'changed': 'смена статуса',
+        'reset': 'сброс',
+    },
+    'status': {
+        TS_FUTURE: 'метка в будущем',
+        TS_OFFSET_JUMP: 'скачок смещения',
+        TS_INVALID: 'метка неразборчива',
+        TS_LATE: 'запоздалая доставка',
+    },
+    'modes': {
+        MODE_FLAG: 'сдвиг пояса только помечается',
+        MODE_CORRECT: 'сдвиг пояса исправляется',
+    },
+}
+
+# Строка «Метки времени» в статусе MQTT: (ключ счётчика, подпись, подсветка ненулевого)
+CLOCK_COUNTERS = (
+    ('ok', 'ok', ''),
+    ('late', 'late', ''),
+    ('tz_shift', 'tz_shift', 'warn'),
+    ('future', 'future', 'warn'),
+    ('offset_jump', 'offset_jump', 'warn'),
+    ('invalid', 'invalid', 'bad'),
+    ('corrected', 'исправлено', ''),
+    ('quarantined', 'карантин', 'warn'),
+    ('replaced', 'время приёма', ''),
+    ('errors', 'ошибки модуля', 'bad'),
+)
+
+_MINUS = '−'
+_NBSP = ' '
+
+
+def _fmt_sec(value: Any) -> str:
+    """Секунды со знаком без единиц: «−5,0», «+7 190», «0,0»; None → «—»."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return '—'
+    if not math.isfinite(x):
+        return '—'
+    a = abs(x)
+    if a < 100:
+        r = round(a, 1)
+        text = f"{r:.1f}".replace('.', ',')
+    else:
+        r = round(a)
+        text = f"{r:,.0f}".replace(',', _NBSP)
+    if r == 0:
+        return text
+    return (_MINUS if x < 0 else '+') + text
+
+
+@app.template_filter('clock_offset')
+def _fmt_offset(value: Any) -> str:
+    """offset для главной: «−5,0 с», «+7 190 с (≈ +2,0 ч)», «−900 с (≈ −15 мин)»."""
+    text = _fmt_sec(value)
+    if text == '—':
+        return text
+    x = float(value)
+    a = abs(x)
+    sign = _MINUS if x < 0 else '+'
+    if a >= 3600:
+        hours = f"{a / 3600:.1f}".replace('.', ',')
+        return f"{text} с (≈ {sign}{hours} ч)"
+    if a >= 600:
+        return f"{text} с (≈ {sign}{a / 60:.0f} мин)"
+    return f"{text} с"
+
+
+def _fmt_duration(value: Any) -> str:
+    """Длительность: «45 с», «12 мин», «2 ч 5 мин»."""
+    try:
+        s = max(0, int(round(float(value))))
+    except (TypeError, ValueError):
+        return ''
+    if s < 60:
+        return f"{s} с"
+    if s < 3600:
+        return f"{s // 60} мин"
+    h, m = divmod(s // 60, 60)
+    return f"{h} ч {m} мин" if m else f"{h} ч"
+
+
+def _clock_status_code(status: Any, k: Any) -> str:
+    """«tz_shift k=+2» / «future»."""
+    if k is None:
+        return str(status)
+    return f"{status} k={int(k):+d}"
+
+
+def _clock_status_text(status: Any, k: Any) -> str:
+    """Короткое описание статуса эпизода по-русски."""
+    if status == TS_TZ_SHIFT and k:
+        k = int(k)
+        return f"часы спешат на {k} ч" if k > 0 else f"часы отстают на {-k} ч"
+    return CLOCK_TEXT['status'].get(status, '')
+
+
+def _clock_offset_range(lo: Any, hi: Any) -> str:
+    """Диапазон offset эпизода: «+7 134…+7 190 с», одно значение — «+300 с»."""
+    if lo is None and hi is None:
+        return '—'
+    if lo is None or hi is None or _fmt_sec(lo) == _fmt_sec(hi):
+        return f"{_fmt_sec(hi if lo is None else lo)} с"
+    return f"{_fmt_sec(lo)}…{_fmt_sec(hi)} с"
+
+
+def _clock_episode_row(ep: dict) -> dict:
+    """Строка таблицы эпизодов (/devices) из episode view ClockGuard.snapshot()."""
+    reason = ep.get('close_reason')
+    action = ep.get('action')
+    return {
+        'open': bool(ep.get('open')),
+        'start': ep.get('start_local') or '—',
+        'end': ep.get('end_local') or '—',
+        'duration': _fmt_duration(ep.get('duration_sec')),
+        'router_sn': ep.get('router_sn'),
+        'status_code': _clock_status_code(ep.get('status'), ep.get('k')),
+        'status_text': _clock_status_text(ep.get('status'), ep.get('k')),
+        'action_text': CLOCK_TEXT['actions'].get(action, action or '—'),
+        'count': ep.get('count', 0),
+        'offset': _clock_offset_range(ep.get('min_offset'), ep.get('max_offset')),
+        'close_text': CLOCK_TEXT['close'].get(reason, reason) if reason else '—',
+        'first_ts': ep.get('first_ts') or '',
+        'last_ts': ep.get('last_ts') or '',
+    }
+
+
+def _clock_snapshot() -> Optional[dict]:
+    """ClockGuard.snapshot() или None (модуль не инициализирован / ошибка)."""
+    guard = get_clock_guard()
+    if guard is None:
+        return None
+    try:
+        return guard.snapshot()
+    except Exception as e:
+        logger.error(f"Не удалось получить состояние контроля метки времени: {e}", exc_info=True)
+        return None
+
+
+def _clock_router_status(guard: Optional[ClockGuard], router_sn: str) -> Optional[dict]:
+    """Статус часов роутера для /api/routers (None — нет модуля или данных)."""
+    if guard is None:
+        return None
+    try:
+        return guard.router_status(router_sn)
+    except Exception as e:
+        logger.error(f"Не удалось получить статус часов роутера {router_sn}: {e}", exc_info=True)
+        return None
+
+
+def _clock_counters_view(mqtt_stats: Optional[dict], clock: Optional[dict]) -> Optional[dict]:
+    """
+    Строка «Метки времени» в статусе MQTT.
+
+    Счётчики — из mqtt.get_stats()['clock_guard'] (словарь счётчиков или
+    {'counters': {...}, 'mode': ...}); если ключа нет — из самого модуля.
+    None — показывать нечего.
+    """
+    raw = mqtt_stats.get('clock_guard') if isinstance(mqtt_stats, dict) else None
+    counters, mode, enabled = None, None, None
+    if isinstance(raw, dict):
+        if isinstance(raw.get('counters'), dict):
+            counters = raw['counters']
+            mode = raw.get('mode')
+            enabled = raw.get('enabled')
+        else:
+            counters = raw
+    if clock is not None:
+        enabled = clock.get('enabled')
+        mode = clock.get('mode') or mode
+        if counters is None:
+            counters = clock.get('counters')
+    if counters is None and enabled is None:
+        return None
+    counters = counters or {}
+    items = []
+    for key, label, level in CLOCK_COUNTERS:
+        value = counters.get(key)
+        if value is None:
+            continue
+        items.append({'label': label, 'value': value,
+                      'cls': f"clock-count-{level}" if level and value else ''})
+    return {
+        'enabled': enabled is not False,
+        'mode': mode,
+        'overrides': len((clock or {}).get('router_modes') or {}),
+        'items': items,
+    }
+
+
+# ============================================================
 # Routes
 # ============================================================
 
@@ -450,7 +731,13 @@ def index():
     mqtt = get_mqtt_client()
     
     stats = store.get_stats()
-    
+
+    # Контроль метки времени: статус часов по роутерам, сигналы о молчании
+    clock = _clock_snapshot()
+    clock_routers = {r['router_sn']: r for r in clock['routers']} if clock else {}
+    clock_modes = (clock.get('router_modes') or {}) if clock else {}
+    clock_alerts = [r for r in clock['routers'] if r.get('silence')] if clock else []
+
     # Get router data with panels
     routers_data = []
     for router in store.get_all_routers():
@@ -463,12 +750,14 @@ def index():
             'gps_speed': router.gps_speed,
             'gps_satellites': router.gps_satellites,
             'gps_time': router.gps_time,
-            'panels': panels
+            'panels': panels,
+            'clock': clock_routers.get(str(router.sn)),
+            'clock_override': str(router.sn) in clock_modes,
         })
-    
+
     # Sort by SN
     routers_data.sort(key=lambda r: r['sn'])
-    
+
     mqtt_stats = mqtt.get_stats() if mqtt else None
     store_decode_errors = len(store.get_decode_errors())
     raw_undecoded_count = len(mqtt.get_raw_undecoded()) if mqtt else 0
@@ -481,6 +770,10 @@ def index():
         mqtt_stats=mqtt_stats,
         store_decode_errors=store_decode_errors,
         raw_undecoded_count=raw_undecoded_count,
+        clock_alerts=clock_alerts,
+        clock_enabled=bool(clock and clock.get('enabled')),
+        clock_classes=CLOCK_STATE_CLASSES,
+        clock_counters=_clock_counters_view(mqtt_stats, clock),
     )
     
     # Wrap in base template
@@ -529,7 +822,8 @@ def api_stats():
 def api_routers():
     """API endpoint for routers list."""
     store = get_store()
-    
+    guard = get_clock_guard()
+
     routers = []
     for router in store.get_all_routers():
         panels = store.get_router_panels(router.sn)
@@ -547,10 +841,21 @@ def api_routers():
                     'message_count': p.message_count
                 }
                 for p in panels
-            ]
+            ],
+            # Статус часов роутера (контроль метки времени); None — нет модуля или данных
+            'clock': _clock_router_status(guard, router.sn),
         })
-    
+
     return jsonify(routers)
+
+
+@app.route('/api/clock')
+def api_clock():
+    """API: контроль метки времени — режим, счётчики, часы роутеров, эпизоды (новые первыми)."""
+    guard = get_clock_guard()
+    if guard is None:
+        return jsonify({'enabled': False, 'routers': [], 'episodes': [], 'counters': {}})
+    return jsonify(guard.snapshot())
 
 
 @app.route('/api/router/<router_sn>/panel/<int:bserver_id>/registers')
@@ -575,13 +880,23 @@ def api_panel_registers(router_sn: str, bserver_id: int):
 
 @app.route('/api/admin/clear-memory', methods=['POST'])
 def api_clear_memory():
-    """API endpoint to clear in-memory store."""
+    """API endpoint to clear in-memory store (и состояние контроля метки времени)."""
     store = get_store()
     cleared = store.clear()
-    logger.warning(f"Выполнена очистка in-memory: routers={cleared['routers']}, panels={cleared['panels']}")
+    # Контроль метки времени: состояние роутеров и журнал эпизодов (счётчики остаются)
+    guard = get_clock_guard()
+    clock_cleared = guard.reset() if guard is not None else None
+    if clock_cleared is None:
+        clock_text = "метка времени: модуль не инициализирован"
+    else:
+        clock_text = (f"метка времени: роутеров={clock_cleared['routers']}, "
+                      f"эпизодов={clock_cleared['episodes']}")
+    logger.warning(f"Выполнена очистка in-memory: routers={cleared['routers']}, panels={cleared['panels']}, "
+                   f"{clock_text}")
     return jsonify({
         'ok': True,
-        'cleared': cleared
+        'cleared': cleared,
+        'clock': clock_cleared,
     })
 
 
@@ -683,8 +998,10 @@ DEVICES_TEMPLATE = '''
                 <td><strong>{{ key }}</strong></td>
                 <td>{{ info.count }}</td>
                 <td>{{ info.last_seen_ago }}</td>
+                {# Ключ приходит из MQTT: только через data-атрибут. В JS-строке внутри
+                   onclick экранирование &#39; браузер раскодирует до запуска JS #}
                 <td><button type="button" class="btn btn-danger" style="padding:2px 8px;font-size:0.75rem"
-                    onclick="clearUnknownKey('{{ key }}')">✕</button></td>
+                    data-key="{{ key }}" onclick="clearUnknownKey(this.dataset.key)">✕</button></td>
             </tr>
         {% endfor %}
         </tbody>
@@ -729,6 +1046,50 @@ DEVICES_TEMPLATE = '''
         <button class="btn" onclick="refreshErrors()">🔄 Обновить</button>
         <button class="btn btn-danger" onclick="clearErrors()">Очистить ошибки</button>
     </div>
+</div>
+
+<div class="card" id="clock-episodes">
+    <h2>⏱ Ошибки декодирования — метка времени <span id="clock-episodes-count">({{ clock_episodes|length }})</span></h2>
+    <p id="clock-episodes-mode" class="gps" style="margin-bottom:6px">
+    {%- if clock is none -%}
+        Контроль метки времени не инициализирован.
+    {%- elif not clock.enabled -%}
+        Контроль метки времени выключен (clock_guard.enabled: false).
+    {%- else -%}
+        Режим: <strong>{{ clock.mode }}</strong> — {{ clock_text.modes.get(clock.mode, '') }}
+        {%- if clock.router_modes %}. Свой режим: {% for sn, mode in clock.router_modes|dictsort %}<code>{{ sn }}</code> → <strong>{{ mode }}</strong>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+    {%- endif -%}
+    </p>
+    <p class="gps" style="margin-bottom:10px">Показаны эпизоды, а не отдельные записи. Эпизод закрывается после 2 нормальных меток или при молчании роутера.</p>
+    <div id="clock-episodes-body">
+    {% if clock_episodes %}
+    <table>
+        <thead>
+            <tr><th>Начало</th><th>Конец</th><th>Роутер</th><th>Статус</th><th>Действие</th><th>Записей</th><th>Offset</th><th>Закрыт</th></tr>
+        </thead>
+        <tbody>
+        {% for e in clock_episodes %}
+            <tr{% if e.open %} class="clock-open"{% endif %}>
+                <td style="font-size:0.85rem">{{ e.start }}</td>
+                <td style="font-size:0.85rem">{% if e.open %}<strong class="clock-count-warn">идёт</strong>{% else %}{{ e.end }}{% endif %}{% if e.duration %}<br><small>{{ e.duration }}</small>{% endif %}</td>
+                <td>{{ e.router_sn }}</td>
+                <td title="первая метка: {{ e.first_ts }}; последняя: {{ e.last_ts }}"><code>{{ e.status_code }}</code>{% if e.status_text %}<br><small>{{ e.status_text }}</small>{% endif %}</td>
+                <td>{{ e.action_text }}</td>
+                <td>{{ e.count }}</td>
+                <td style="white-space:nowrap">{{ e.offset }}</td>
+                <td>{{ e.close_text }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#999">Эпизодов нет</p>
+    {% endif %}
+    </div>
+    <div style="margin-top:10px">
+        <button type="button" class="btn" onclick="refreshClockEpisodes()">🔄 Обновить</button>
+    </div>
+    <script>var CLOCK_TEXT = {{ clock_text|tojson }};</script>
 </div>
 
 {% if ignore_lists %}
@@ -970,18 +1331,143 @@ async function refreshErrors() {
             return;
         }
         let html = '<table><thead><tr><th>Время</th><th>Роутер</th><th>Панель</th><th>Тип</th><th>Адрес</th><th>Причина</th><th>Raw</th><th></th></tr></thead><tbody>';
+        // router_sn (из топика) и raw_data (из payload) приходят из сети — всё через escapeHtml;
+        // аргументы onclick — JSON-строки JS, экранированные для атрибута
         errors.forEach(function(e) {
-            html += '<tr><td style="font-size:0.8rem">' + formatAge(e.timestamp) + '</td>'
-                + '<td>' + e.router_sn + '</td>'
-                + '<td>' + e.bserver_id + '</td>'
-                + '<td>' + e.device_type + '</td>'
-                + '<td>' + e.addr + '</td>'
-                + '<td>' + e.reason + '</td>'
-                + '<td class="raw-value">' + (e.raw_data || '—') + '</td>'
-                + '<td><button type="button" class="btn" style="padding:2px 8px;font-size:0.75rem" onclick="ignoreRegister(\\'' + e.device_type + '\\', \\'' + e.addr + '\\')">Игнор</button></td></tr>';
+            var ignoreArgs = escapeHtml(JSON.stringify(String(e.device_type))) + ', '
+                + escapeHtml(JSON.stringify(String(e.addr)));
+            html += '<tr><td style="font-size:0.8rem">' + escapeHtml(formatAge(e.timestamp)) + '</td>'
+                + '<td>' + escapeHtml(e.router_sn) + '</td>'
+                + '<td>' + escapeHtml(e.bserver_id) + '</td>'
+                + '<td>' + escapeHtml(e.device_type) + '</td>'
+                + '<td>' + escapeHtml(e.addr) + '</td>'
+                + '<td>' + escapeHtml(e.reason) + '</td>'
+                + '<td class="raw-value">' + (e.raw_data ? escapeHtml(e.raw_data) : '—') + '</td>'
+                + '<td><button type="button" class="btn" style="padding:2px 8px;font-size:0.75rem" onclick="ignoreRegister(' + ignoreArgs + ')">Игнор</button></td></tr>';
         });
         html += '</tbody></table>';
         body.innerHTML = html;
+    } catch (e) { alert('Ошибка загрузки: ' + e); }
+}
+
+// ---- Метка времени (clock_guard): эпизоды ----
+// router_sn и метки приходят из сети — всё, что идёт в innerHTML, через escapeHtml.
+
+function escapeHtml(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function clockText(group, key) {
+    var t = (window.CLOCK_TEXT || {})[group] || {};
+    return Object.prototype.hasOwnProperty.call(t, key) ? t[key] : null;
+}
+
+// Секунды со знаком: «−5,0», «+7 190» (как _fmt_sec в web_ui.py)
+function clockFmtSec(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    var x = Number(value);
+    if (!isFinite(x)) return '—';
+    var a = Math.abs(x), r, text;
+    if (a < 100) {
+        r = Math.round(a * 10) / 10;
+        text = r.toLocaleString('ru-RU', {minimumFractionDigits: 1, maximumFractionDigits: 1});
+    } else {
+        r = Math.round(a);
+        text = r.toLocaleString('ru-RU', {maximumFractionDigits: 0});
+    }
+    if (r === 0) return text;
+    return (x < 0 ? '−' : '+') + text;
+}
+
+function clockFmtDuration(value) {
+    if (value === null || value === undefined) return '';
+    var s = Math.max(0, Math.round(Number(value)));
+    if (!isFinite(s)) return '';
+    if (s < 60) return s + ' с';
+    if (s < 3600) return Math.floor(s / 60) + ' мин';
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return m ? h + ' ч ' + m + ' мин' : h + ' ч';
+}
+
+function clockStatusCode(status, k) {
+    if (k === null || k === undefined) return String(status);
+    return status + ' k=' + (k > 0 ? '+' : '') + k;
+}
+
+function clockStatusText(status, k) {
+    if (status === 'tz_shift' && k) {
+        return k > 0 ? 'часы спешат на ' + k + ' ч' : 'часы отстают на ' + (-k) + ' ч';
+    }
+    return clockText('status', status) || '';
+}
+
+function clockOffsetRange(lo, hi) {
+    var noLo = (lo === null || lo === undefined), noHi = (hi === null || hi === undefined);
+    if (noLo && noHi) return '—';
+    if (noLo || noHi || clockFmtSec(lo) === clockFmtSec(hi)) return clockFmtSec(noLo ? hi : lo) + ' с';
+    return clockFmtSec(lo) + '…' + clockFmtSec(hi) + ' с';
+}
+
+function clockModeHtml(snap) {
+    if (!snap || !snap.enabled) return 'Контроль метки времени выключен или не инициализирован.';
+    var html = 'Режим: <strong>' + escapeHtml(snap.mode) + '</strong> — ' + escapeHtml(clockText('modes', snap.mode) || '');
+    var rm = snap.router_modes || {};
+    var sns = Object.keys(rm).sort();
+    if (sns.length) {
+        html += '. Свой режим: ' + sns.map(function(sn) {
+            return '<code>' + escapeHtml(sn) + '</code> → <strong>' + escapeHtml(rm[sn]) + '</strong>';
+        }).join(', ');
+    }
+    return html;
+}
+
+function clockEpisodeRow(e) {
+    var dur = clockFmtDuration(e.duration_sec);
+    var text = clockStatusText(e.status, e.k);
+    var end = e.open ? '<strong class="clock-count-warn">идёт</strong>' : escapeHtml(e.end_local || '—');
+    var action = clockText('actions', e.action) || e.action || '—';
+    var closed = e.close_reason ? (clockText('close', e.close_reason) || e.close_reason) : '—';
+    return '<tr' + (e.open ? ' class="clock-open"' : '') + '>'
+        + '<td style="font-size:0.85rem">' + escapeHtml(e.start_local || '—') + '</td>'
+        + '<td style="font-size:0.85rem">' + end + (dur ? '<br><small>' + escapeHtml(dur) + '</small>' : '') + '</td>'
+        + '<td>' + escapeHtml(e.router_sn) + '</td>'
+        + '<td title="первая метка: ' + escapeHtml(e.first_ts) + '; последняя: ' + escapeHtml(e.last_ts) + '">'
+        + '<code>' + escapeHtml(clockStatusCode(e.status, e.k)) + '</code>'
+        + (text ? '<br><small>' + escapeHtml(text) + '</small>' : '') + '</td>'
+        + '<td>' + escapeHtml(action) + '</td>'
+        + '<td>' + escapeHtml(e.count) + '</td>'
+        + '<td style="white-space:nowrap">' + escapeHtml(clockOffsetRange(e.min_offset, e.max_offset)) + '</td>'
+        + '<td>' + escapeHtml(closed) + '</td>'
+        + '</tr>';
+}
+
+function renderClockEpisodes(snap) {
+    var episodes = (snap && snap.episodes) || [];
+    document.getElementById('clock-episodes-count').textContent = '(' + episodes.length + ')';
+    document.getElementById('clock-episodes-mode').innerHTML = clockModeHtml(snap);
+    var body = document.getElementById('clock-episodes-body');
+    if (episodes.length === 0) {
+        body.innerHTML = '<p style="color:#999">Эпизодов нет</p>';
+        return;
+    }
+    var html = '<table><thead><tr><th>Начало</th><th>Конец</th><th>Роутер</th><th>Статус</th>'
+        + '<th>Действие</th><th>Записей</th><th>Offset</th><th>Закрыт</th></tr></thead><tbody>';
+    episodes.forEach(function(e) { html += clockEpisodeRow(e); });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+}
+
+async function refreshClockEpisodes() {
+    try {
+        const resp = await fetch('/api/clock', {cache: 'no-store'});
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        renderClockEpisodes(await resp.json());
     } catch (e) { alert('Ошибка загрузки: ' + e); }
 }
 
@@ -1226,12 +1712,19 @@ def devices_page():
     # Ignore lists
     ignore_lists = get_all_ignore_lists()
 
+    # Метка времени: эпизоды (новые первыми)
+    clock = _clock_snapshot()
+    clock_episodes = [_clock_episode_row(ep) for ep in clock['episodes']] if clock else []
+
     content = render_template_string(
         DEVICES_TEMPLATE,
         devices=devices,
         unknown_keys=unknown_keys,
         decode_errors=decode_errors,
-        ignore_lists=ignore_lists
+        ignore_lists=ignore_lists,
+        clock=clock,
+        clock_episodes=clock_episodes,
+        clock_text=CLOCK_TEXT,
     )
     html = wrap_content('Устройства', content, auto_reload=False)
     # Вставляем скрипт устройств перед </body>, вне контейнера

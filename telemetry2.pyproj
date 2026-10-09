@@ -24,6 +24,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="app.py" />
+    <Compile Include="clock_guard.py" />
     <Compile Include="decoder.py" />
     <Compile Include="health_monitor.py" />
     <Compile Include="maps_loader.py" />
@@ -31,6 +32,12 @@
     <Compile Include="mqtt_test_publisher.py" />
     <Compile Include="panel_store.py" />
     <Compile Include="test_local.py" />
+    <Compile Include="tests\test_app_clock_config.py" />
+    <Compile Include="tests\test_clock_guard.py" />
+    <Compile Include="tests\test_mqtt_clock_integration.py" />
+    <Compile Include="tests\test_replay_clock_guard.py" />
+    <Compile Include="tests\test_web_ui_clock.py" />
+    <Compile Include="tools\replay_clock_guard.py" />
     <Compile Include="version.py" />
     <Compile Include="web_ui.py" />
   </ItemGroup>
@@ -39,7 +46,9 @@
     <Content Include="config.example.yaml" />
     <Content Include="config.yaml" />
     <Content Include="install.sh" />
+    <Content Include="pytest.ini" />
     <Content Include="README.md" />
+    <Content Include="requirements-dev.txt" />
     <Content Include="requirements.txt" />
     <Content Include="update.sh" />
   </ItemGroup>

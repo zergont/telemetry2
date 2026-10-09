@@ -1,0 +1,10 @@
+# Universal Modbus Decoder & Web UI
+# Зависимости для разработки и тестов (на сервере не нужны)
+#
+#   pip install -r requirements-dev.txt
+#   python -m pytest
+
+-r requirements.txt
+
+# Тесты
+pytest>=8.0

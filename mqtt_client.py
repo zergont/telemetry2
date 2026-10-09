@@ -30,8 +30,14 @@ import paho.mqtt.client as mqtt
 from decoder import get_decoder
 from panel_store import get_store
 from maps_loader import get_loader, get_registered_device_types
+from clock_guard import ACTION_QUARANTINE, TsVerdict, get_clock_guard, passthrough_verdict
 
 logger = logging.getLogger(__name__)
+
+# Корень decoded-топиков, который читают db-writer и UI-telemetry.
+# Карантин публиковать сюда запрещено: повторная доставка «будущих» записей
+# ломает обнаружение разрывов, latest_state и периоды состояний.
+_DECODED_ROOT = 'cg/v1/decoded'
 
 
 class MqttClient:
@@ -89,6 +95,10 @@ class MqttClient:
         # Buffer for undecoded messages (last 10)
         self._raw_undecoded: deque = deque(maxlen=10)
 
+        # Контроль метки времени: ограничение частоты сообщений об ошибках
+        self._clock_error_logged_at = 0.0
+        self._quarantine_topic_warned = False
+
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         """Callback when connected to broker."""
         if rc == 0:
@@ -132,11 +142,15 @@ class MqttClient:
 
     def _on_message(self, client, userdata, msg):
         """Callback when message received."""
+        # Время приёма — первым делом, одно значение на всё MQTT-сообщение.
+        # msg.timestamp у paho монотонный, а не настенный — не использовать.
+        t_recv = time.time()
+
         with self._lock:
             self.messages_received += 1
 
         try:
-            self._process_message(msg.topic, msg.payload)
+            self._process_message(msg.topic, msg.payload, t_recv)
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
             self._store_raw(msg.topic, 'exception',
@@ -304,8 +318,16 @@ class MqttClient:
 
         return results
 
-    def _process_message(self, topic: str, payload: bytes):
-        """Process a raw telemetry message."""
+    def _process_message(self, topic: str, payload: bytes, t_recv: Optional[float] = None):
+        """
+        Process a raw telemetry message.
+
+        t_recv — время приёма сообщения (time.time() в начале _on_message).
+        None — взять текущее время (обратная совместимость).
+        """
+        if t_recv is None:
+            t_recv = time.time()
+
         # Extract router SN from topic
         match = self._topic_regex.search(topic)
         if not match:
@@ -362,8 +384,35 @@ class MqttClient:
         if self.debug_mode and len(normalized_list) > 1:
             logger.debug(f"Батч: {len(normalized_list)} пакетов в одном сообщении")
 
+        # Метка времени проверяется по каждой записи отдельно: пачки бывают смешанными
+        guard = get_clock_guard()
         for normalized in normalized_list:
-            self._process_modbus(router_sn, normalized)
+            verdict = self._classify_timestamp(guard, router_sn, normalized, t_recv)
+            self._process_modbus(router_sn, normalized, verdict)
+
+    def _classify_timestamp(self, guard, router_sn: str, normalized: dict,
+                            t_recv: float) -> Optional[TsVerdict]:
+        """
+        Проверка метки времени записи (clock_guard).
+
+        None — модуль не инициализирован или выключен: публикация как раньше.
+        Любая ошибка не должна ронять сообщение: тогда вердикт «ok, как есть».
+        """
+        if guard is None:
+            return None
+        date_iso = normalized.get('date_iso')
+        try:
+            return guard.classify(router_sn, date_iso, t_recv)
+        except Exception as e:
+            now = time.time()
+            if now - self._clock_error_logged_at >= 60:
+                self._clock_error_logged_at = now
+                logger.error(f"Ошибка контроля метки времени (роутер {router_sn}): {e} — "
+                             f"запись публикуется как есть", exc_info=True)
+            try:
+                return passthrough_verdict(date_iso, t_recv)
+            except Exception:
+                return None
 
     def _process_gps(self, router_sn: str, gps_data: dict):
         """Process a GPS message and update router state."""
@@ -376,8 +425,17 @@ class MqttClient:
                          f"lon={gps_data.get('longitude')}, "
                          f"sat={gps_data.get('satellites')}")
 
-    def _process_modbus(self, router_sn: str, normalized: dict):
-        """Process a normalized Modbus message."""
+    def _process_modbus(self, router_sn: str, normalized: dict,
+                        verdict: Optional[TsVerdict] = None):
+        """
+        Process a normalized Modbus message.
+
+        verdict — результат проверки метки времени (clock_guard):
+          None        — публикация как раньше, без новых полей;
+          quarantine  — в decoded не публикуется, запись уходит в карантин;
+          publish     — timestamp из вердикта + поля received_at, ts_status, ...
+        Хранилище панелей обновляется всегда: значения регистров живые.
+        """
         date_iso    = normalized['date_iso']
         server_id   = normalized['server_id']
         full_addr   = normalized['full_addr']
@@ -463,11 +521,96 @@ class MqttClient:
         # Публикуем только успешно декодированные регистры.
         # Регистры с reason (Неизвестный регистр, ошибка декодирования) уходят только в store.
         ok_registers = [r for r in decoded_registers if r.get('reason') is None]
-        self._publish_decoded(router_sn, server_id, device_type, ok_registers, date_iso)
+
+        if verdict is None:
+            # Контроль метки времени выключен — как раньше
+            self._publish_decoded(router_sn, server_id, device_type, ok_registers, date_iso)
+            return
+
+        if verdict.action == ACTION_QUARANTINE:
+            self._quarantine_record(router_sn, server_id, device_type, full_addr,
+                                    words, ok_registers, date_iso, verdict)
+            return
+
+        self._publish_decoded(router_sn, server_id, device_type, ok_registers,
+                              verdict.timestamp, extra=verdict.payload_fields())
+
+    def _quarantine_record(self, router_sn: str, server_id, device_type: str,
+                           full_addr: str, words: list, ok_registers: list,
+                           date_iso, verdict: TsVerdict):
+        """
+        Запись с «будущей» меткой: в decoded не публикуется.
+        Пишется в JSONL-карантин; топик карантина — только для наблюдения
+        и никогда не под decoded-топиком.
+        """
+        entry = {
+            'received_at': verdict.received_at,
+            'router_sn': router_sn,
+            'bserver_id': server_id,
+            'device_type': device_type,
+            'timestamp': date_iso,
+            'ts_status': verdict.ts_status,
+            'ts_offset_sec': verdict.offset_sec,
+            'full_addr': full_addr,
+            'data': words,
+            'registers': ok_registers,
+        }
+
+        guard = get_clock_guard()
+        if guard is None:
+            logger.warning(f"Карантин недоступен (контроль метки времени не инициализирован) — "
+                           f"запись роутера {router_sn} {device_type}:{full_addr} отброшена")
+            return
+
+        written = guard.quarantine(entry)
+        if self.debug_mode:
+            if written:
+                file_state = 'записано в файл'
+            elif not guard.cfg.quarantine_file:
+                file_state = 'файл карантина выключен'
+            else:
+                file_state = 'ошибка записи в файл (см. errors)'
+            logger.debug(f"Карантин: router={router_sn}, server={server_id}, addr={full_addr}, "
+                         f"метка={date_iso!r}, offset={verdict.offset_sec}, {file_state}")
+
+        try:
+            topic = guard.quarantine_topic(router_sn, device_type, server_id)
+        except Exception as e:
+            logger.error(f"Ошибка формирования топика карантина: {e}")
+            return
+        if not topic:
+            return
+        if not self._quarantine_topic_allowed(topic):
+            if not self._quarantine_topic_warned:
+                self._quarantine_topic_warned = True
+                logger.error(f"Топик карантина {topic} попадает под decoded-топик "
+                             f"({self.decoded_topic_base}) — публикация карантина отключена. "
+                             f"Исправьте clock_guard.quarantine.topic_base")
+            return
+        if not self._connected or not self._client:
+            return
+
+        try:
+            self._client.publish(topic, json.dumps(entry, default=str), qos=0, retain=False)
+        except Exception as e:
+            logger.error(f"Ошибка публикации карантина: {e}")
+
+    def _quarantine_topic_allowed(self, topic: str) -> bool:
+        """Карантин нельзя публиковать под decoded-топиком (ни под настроенным, ни под cg/v1/decoded)."""
+        for base in (str(self.decoded_topic_base or '').rstrip('/'), _DECODED_ROOT):
+            if base and (topic == base or topic.startswith(base + '/')):
+                return False
+        return True
 
     def _publish_decoded(self, router_sn: str, bserver_id: int, device_type: str,
-                         decoded_registers: list, timestamp: Optional[str]):
-        """Publish decoded data to MQTT."""
+                         decoded_registers: list, timestamp: Optional[str],
+                         extra: Optional[dict] = None):
+        """
+        Publish decoded data to MQTT.
+
+        extra — дополнительные поля (received_at, ts_status, ts_offset_sec, ...),
+        добавляются после основных; порядок основных ключей не меняется.
+        """
         if not self._connected or not self._client:
             return
 
@@ -482,6 +625,8 @@ class MqttClient:
             'device_type': device_type,
             'registers': decoded_registers
         }
+        if extra:
+            payload.update(extra)
 
         try:
             self._client.publish(topic, json.dumps(payload))
@@ -549,6 +694,15 @@ class MqttClient:
 
     def get_stats(self) -> dict:
         """Get client statistics."""
+        # Счётчики контроля метки времени — вне self._lock (у модуля свой lock)
+        clock_counters = None
+        guard = get_clock_guard()
+        if guard is not None:
+            try:
+                clock_counters = guard.get_counters()
+            except Exception as e:
+                logger.error(f"Ошибка чтения счётчиков контроля метки времени: {e}")
+
         with self._lock:
             return {
                 'connected': self._connected,
@@ -560,6 +714,7 @@ class MqttClient:
                 'gzip_received': self.gzip_received,
                 'gzip_bytes_in': self.gzip_bytes_in,
                 'gzip_bytes_out': self.gzip_bytes_out,
+                'clock_guard': clock_counters,
             }
 
     # ----------------------------------------------------------------

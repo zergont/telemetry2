@@ -34,7 +34,9 @@ def create_payload(server_id: int, addr: int, data: list) -> dict:
     """Create a payload in real broker format (input2)."""
     return {
         "input2": {
-            "date_iso_8601": datetime.now().isoformat(),
+            # Формат роутера: местное время с поясом без двоеточия (2026-10-09T13:20:28+0300).
+            # Метка без пояса декодером считается invalid и заменяется временем приёма.
+            "date_iso_8601": datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z'),
             "server_id": server_id,
             "addr": addr,
             "data": json.dumps(data)

@@ -30,6 +30,7 @@ import yaml
 
 from maps_loader import load_device_maps
 from panel_store import init_store
+from clock_guard import init_clock_guard, get_clock_guard, is_off_value
 from mqtt_client import init_mqtt_client
 from health_monitor import init_health_monitor
 from web_ui import run_web_ui
@@ -123,6 +124,53 @@ def load_maps_from_config(config: dict) -> tuple:
     return True, payload_key_map
 
 
+def init_clock_guard_from_config(config: dict):
+    """
+    Инициализация контроля метки времени из секции clock_guard.
+
+    Секции нет — значения по умолчанию (clock_guard.DEFAULTS).
+    `clock_guard: false` (off, no, …) — короткая форма выключения.
+    Ошибка в значениях — сообщение в лог и значения по умолчанию, но явное
+    выключение (enabled: false) соблюдается: в DEFAULTS модуль включён, и
+    выключатель, которым оператор возвращает прежнее поведение на время
+    инцидента, иначе молча превращался бы во включение.
+
+    Returns (guard, config_ok: bool)
+    """
+    logger = logging.getLogger(__name__)
+    section = config.get('clock_guard')
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        if is_off_value(section):
+            return init_clock_guard({'enabled': False}), True
+        logger.error("Секция clock_guard должна быть словарём — используются значения по умолчанию")
+        return init_clock_guard({}), False
+
+    try:
+        return init_clock_guard(section), True
+    except Exception as e:
+        if is_off_value(section.get('enabled')):
+            logger.error(f"Ошибка в секции clock_guard: {e} — контроль выключен "
+                         f"(clock_guard.enabled: false), остальные значения не применяются")
+            return init_clock_guard({'enabled': False}), False
+        logger.error(f"Ошибка в секции clock_guard: {e} — используются значения по умолчанию")
+        return init_clock_guard({}), False
+
+
+def describe_clock_guard(guard) -> str:
+    """Строка статуса контроля метки времени для консоли."""
+    cfg = guard.cfg
+    if not cfg.enabled:
+        return "контроль метки времени выключен"
+    text = f"контроль метки времени: режим {cfg.mode}"
+    if cfg.router_modes:
+        overrides = ', '.join(f"{sn}={mode}" for sn, mode in sorted(cfg.router_modes.items()))
+        text += f", роутеры: {overrides}"
+    text += f", карантин: {cfg.quarantine_file or 'файл выключен'}"
+    return text
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -181,6 +229,19 @@ def main():
     )
 
     print_status(True, "хранилище панелей инициализировано")
+
+    # ================================================================
+    # Initialize clock guard (контроль метки времени)
+    # ================================================================
+    # До запуска монитора состояния: он вызывает clock_guard.tick()
+    clock_guard, clock_config_ok = init_clock_guard_from_config(config)
+    if clock_config_ok:
+        print_status(True, describe_clock_guard(clock_guard))
+    else:
+        fallback = ("значения по умолчанию" if clock_guard.enabled
+                    else "выключатель enabled соблюдён, остальные ключи не применяются")
+        print_status(False, f"секция clock_guard с ошибкой, {describe_clock_guard(clock_guard)} "
+                            f"({fallback})")
 
     # ================================================================
     # Initialize health monitor
@@ -264,6 +325,14 @@ def main():
 
     mqtt_client.stop()
     health_monitor.stop()
+
+    try:
+        # Текущий экземпляр (мог быть переинициализирован после старта)
+        guard = get_clock_guard()
+        if guard is not None:
+            guard.close()
+    except Exception as e:
+        logger.error(f"Ошибка закрытия контроля метки времени: {e}")
 
     logger.info("Работа завершена")
     print("\nДо свидания!")

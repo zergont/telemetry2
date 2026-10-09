@@ -19,6 +19,7 @@ from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from panel_store import get_store
+from clock_guard import get_clock_guard
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,17 @@ class HealthMonitor:
             store.update_health_status()
         except Exception as e:
             logger.error(f"Ошибка проверки состояния: {e}")
-    
+
+        # Контроль метки времени: закрыть эпизоды по молчанию роутера,
+        # поднять сигнал о молчании публикатора после tz_shift k>0.
+        # Отдельный try: ошибка одной проверки не должна пропускать другую.
+        try:
+            guard = get_clock_guard()
+            if guard is not None:
+                guard.tick()
+        except Exception as e:
+            logger.error(f"Ошибка тика контроля метки времени: {e}")
+
     def start(self):
         """Start the health monitor."""
         if self._running:
